@@ -386,7 +386,10 @@
         "title": "与 {{name}} 配对",
         "instruction": "在 Sunshine 中输入此 PIN 码以授权客户端：",
         "contacting": "正在联系主机…",
+        "waitingForHost": "正在等待 {{name}} 显示配对请求…",
         "enterPin": "在 Sunshine 中输入此 PIN 码（主机上的 Web 界面或 stdin）",
+        "verifying": "已输入 PIN 码，正在验证…",
+        "stillWaiting": "仍在等待 {{name}}。请确认该主机上的 Sunshine 正在运行并显示了配对请求，或重试。",
         "unexpectedResponse": "服务器返回了意外响应。",
         "contactFailed": "联系服务器失败：{{message}}",
         "paired": "配对成功！"

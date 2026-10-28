@@ -102,7 +102,8 @@ NvPairingManager::~NvPairingManager()
 
 void NvPairingManager::openConnection(const QString& scheme, const QString& command,
                                       const QString& arguments, int timeoutMs,
-                                      std::function<void(const QString&, const QString&)> cb)
+                                      std::function<void(const QString&, const QString&)> cb,
+                                      std::function<void()> onSent)
 {
     QUrl url;
     url.setScheme(scheme);
@@ -152,6 +153,16 @@ void NvPairingManager::openConnection(const QString& scheme, const QString& comm
     // Ignore SSL errors (self-signed cert) — scoped to this reply.
     QObject::connect(reply, &QNetworkReply::sslErrors, reply,
                      [reply](const QList<QSslError>&) { reply->ignoreSslErrors(); });
+
+    // The request is on the host: for stage 1, the host now shows it.
+    if (onSent) {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 3, 0)
+        QObject::connect(reply, &QNetworkReply::requestSent, reply,
+                         [onSent = std::move(onSent)]() { onSent(); });
+#else
+        onSent(); // no such signal before Qt 6.3: dispatched is the best we know
+#endif
+    }
 
     QObject::connect(reply, &QNetworkReply::finished, reply,
                      [reply, scheme, command, target, sent, cb = std::move(cb)]() {
@@ -303,7 +314,8 @@ QByteArray NvPairingManager::signMessage(const QByteArray& message)
 
 // --- Pairing protocol ---
 
-void NvPairingManager::initiatePairing(std::function<void(InitResult)> cb)
+void NvPairingManager::initiatePairing(std::function<void(InitResult)> cb,
+                                       std::function<void()> onSent)
 {
     if (m_Stage1Done) {
         cb(INIT_OK);
@@ -349,7 +361,8 @@ void NvPairingManager::initiatePairing(std::function<void(InitResult)> cb)
                 Logger::warning(QString("Pairing stage #1 exception: %1").arg(e.what()));
                 cb(INIT_FAILED);
             }
-        });
+        },
+        std::move(onSent));
 }
 
 void NvPairingManager::completePairing(const QString& pin,

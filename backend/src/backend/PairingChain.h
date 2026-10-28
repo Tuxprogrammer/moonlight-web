@@ -17,11 +17,11 @@
 
 #pragma once
 
+#include "PairingSteps.h"
+
 #include <QByteArray>
 #include <QString>
 #include <functional>
-
-class NvPairingManager;
 
 /**
  * @brief Drives one GameStream pairing handshake from stage 1 to stage 5.
@@ -60,6 +60,23 @@ struct Result
 
 using ResultCallback = std::function<void(const Result&)>;
 
+/// Where a run stands while it waits on the host, for a page to say so.
+enum class Stage
+{
+    Contacting,     ///< Stage 1 is on its way; the host shows nothing yet.
+    HostHasRequest, ///< Stage 1 reached the host, which shows it and waits for the PIN.
+    Verifying,      ///< The host answered stage 1 (the PIN was typed): stages 2-5 run.
+};
+
+/// Fires on each stage change, in order, each stage at most once per run.
+using StageCallback = std::function<void(Stage)>;
+
+/// The stage as the /pair reply names it: "contacting", "enter_pin", "verifying".
+QString stageName(Stage stage);
+
+/// Whether the host has the request (it shows it, or already answered it).
+bool hostContacted(Stage stage);
+
 /// A fresh 4-digit PIN, zero-padded. The *client* picks it in GameStream
 /// pairing — a human then relays it to Sunshine, while for Wolf we post it
 /// ourselves and nobody ever sees it.
@@ -74,12 +91,13 @@ using PinAnnouncer = std::function<void(const QString& pin)>;
 
 /**
  * Run the handshake. `cb` fires exactly once, on a terminal or retryable
- * outcome.
+ * outcome; `onStage` (optional) on each stage change before it.
  *
  * `pm` is borrowed, never freed here, and must outlive the run — its own async
  * callbacks reference it. The caller keeps it alive for the whole chain, the
  * way ComputerManager holds the host uuid in m_SubmitInFlight.
  */
-void run(NvPairingManager* pm, const QString& pin, PinAnnouncer announcer, ResultCallback cb);
+void run(PairingSteps* pm, const QString& pin, PinAnnouncer announcer, ResultCallback cb,
+         StageCallback onStage = {});
 
 } // namespace PairingChain

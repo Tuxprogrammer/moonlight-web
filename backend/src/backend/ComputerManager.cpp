@@ -1339,6 +1339,15 @@ QString ComputerManager::clientUniqueId()
 // --- Pairing ----------------------------------------------------------------
 // Client generates a random PIN, user enters it in Sunshine (stdin or Web UI).
 
+namespace {
+// The progress fields of a pairing reply (docs/wiki/08-REST-API.md).
+void addPairingStage(QJsonObject& obj, PairingChain::Stage stage)
+{
+    obj["stage"] = PairingChain::stageName(stage);
+    obj["host_contacted"] = PairingChain::hostContacted(stage);
+}
+} // namespace
+
 std::pair<int, QJsonObject> ComputerManager::handleStartPairing(const QString& uuid)
 {
     NvComputer* host = findHostByUuid(uuid);
@@ -1373,10 +1382,12 @@ std::pair<int, QJsonObject> ComputerManager::handleStartPairing(const QString& u
             obj["status"] = "initiated";
             obj["pin"] = m_PairingPins.value(uuid);
             obj["message"] = "Enter this PIN in Sunshine (Web UI or stdin)";
+            addPairingStage(obj, m_PairingStage.value(uuid, PairingChain::Stage::Contacting));
             return {200, obj};
         }
         delete m_ActivePairings.take(uuid);
         m_PairingPins.remove(uuid);
+        m_PairingStage.remove(uuid);
     }
     m_PairingError.remove(uuid);
 
@@ -1394,8 +1405,6 @@ std::pair<int, QJsonObject> ComputerManager::handleStartPairing(const QString& u
     QString pin = PairingChain::generatePin();
     m_PairingPins[uuid] = pin;
 
-    // Create PairingManager (stage 1 runs later, in the background chain kicked
-    // off by the first handleSubmitPin poll)
     auto* pm =
         new NvPairingManager(host->appVersion, addr.address(), addr.port(),
                              host->activeHttpsPort > 0 ? host->activeHttpsPort : MW_HTTPS_PORT);
@@ -1404,10 +1413,16 @@ std::pair<int, QJsonObject> ComputerManager::handleStartPairing(const QString& u
     // Not the PIN: it is on the page, and a log gets shared.
     Logger::info(QString("Pairing initiated for %1").arg(uuid));
 
+    // Stage 1 now, while the page shows the PIN: it is what makes the host show
+    // the request, and waiting for the first /pair poll cost every pairing 5 s.
+    // Async — this returns before anything reaches the network.
+    startPairingChain(uuid);
+
     QJsonObject obj;
     obj["status"] = "initiated";
     obj["pin"] = pin;
     obj["message"] = "Enter this PIN in Sunshine (Web UI or stdin)";
+    addPairingStage(obj, m_PairingStage.value(uuid, PairingChain::Stage::Contacting));
     return {200, obj};
 }
 
@@ -1415,6 +1430,12 @@ void ComputerManager::handleSubmitPin(const QString& uuid, ResponseCallback resp
 {
     auto reply = [&respond](const char* status, const QString& message, int code) {
         respond(HttpResponse::json({{"status", status}, {"message", message}}, code));
+    };
+    // Still waiting: say on what, so the page can tell the host's turn from the user's.
+    auto waiting = [this, &respond, &uuid](const QString& message) {
+        QJsonObject obj{{"status", "awaiting_pin"}, {"message", message}};
+        addPairingStage(obj, m_PairingStage.value(uuid, PairingChain::Stage::Contacting));
+        respond(HttpResponse::json(obj, 200));
     };
 
     // A background chain finished with a terminal error — deliver it once.
@@ -1432,7 +1453,7 @@ void ComputerManager::handleSubmitPin(const QString& uuid, ResponseCallback resp
 
     // A pairing chain is running for this host — keep polling.
     if (m_SubmitInFlight.contains(uuid)) {
-        reply("awaiting_pin", "Pairing already in progress...", 200);
+        waiting("Pairing already in progress...");
         return;
     }
 
@@ -1441,7 +1462,7 @@ void ComputerManager::handleSubmitPin(const QString& uuid, ResponseCallback resp
         // No session and no terminal result — a PIN still on file means a start
         // is expected; otherwise the caller must start pairing first.
         if (m_PairingPins.contains(uuid)) {
-            reply("awaiting_pin", "Waiting for pairing to complete...", 200);
+            waiting("Waiting for pairing to complete...");
             return;
         }
         reply("error", "No active pairing session. Start pairing first.", 404);
@@ -1453,13 +1474,14 @@ void ComputerManager::handleSubmitPin(const QString& uuid, ResponseCallback resp
         return;
     }
 
-    // Kick off the async pairing chain and answer immediately. Stage 1
-    // (getservercert) blocks up to 60s server-side until the user enters the
-    // PIN in Sunshine; the frontend keeps polling every 5s and picks up the
-    // terminal result (paired / error) on a later poll. No request is held open
-    // and no nested event loop runs in the HTTP dispatch path.
+    // No chain running: pair/start began one, which ended retryably (stage 1
+    // timed out, or the PIN was not accepted yet). Run it again and answer
+    // immediately. Stage 1 (getservercert) blocks up to 60s server-side until
+    // the user enters the PIN in Sunshine; the frontend keeps polling every 5s
+    // and picks up the terminal result (paired / error) on a later poll. No
+    // request is held open and no nested event loop runs in the HTTP dispatch path.
     startPairingChain(uuid);
-    reply("awaiting_pin", "Waiting for PIN to be entered in Sunshine...", 200);
+    waiting("Waiting for PIN to be entered in Sunshine...");
 }
 
 void ComputerManager::startPairingChain(const QString& uuid)
@@ -1471,6 +1493,7 @@ void ComputerManager::startPairingChain(const QString& uuid)
     NvPairingManager* pm = it.value();
 
     m_SubmitInFlight.insert(uuid);
+    m_PairingStage[uuid] = PairingChain::Stage::Contacting;
 
     // Sequencing lives in PairingChain, shared with the backends that pair
     // without a human. Everything below is this manager's own policy: the
@@ -1479,12 +1502,14 @@ void ComputerManager::startPairingChain(const QString& uuid)
     // No announcer: on a Sunshine host a person is already reading the PIN off
     // our UI and typing it in.
     PairingChain::run(
-        pm, m_PairingPins.value(uuid), {}, [this, uuid](const PairingChain::Result& result) {
+        pm, m_PairingPins.value(uuid), {},
+        [this, uuid](const PairingChain::Result& result) {
             // Re-resolve the session: while in flight nothing frees it, but the host
             // could still be gone if the whole ComputerManager path changed.
             auto it = m_ActivePairings.find(uuid);
             if (it == m_ActivePairings.end()) {
                 m_SubmitInFlight.remove(uuid);
+                m_PairingStage.remove(uuid);
                 return;
             }
             NvPairingManager* pm = it.value();
@@ -1507,7 +1532,8 @@ void ComputerManager::startPairingChain(const QString& uuid)
 
             case PairingChain::Outcome::Retry:
                 // Stage 1 never landed, or the PIN was not accepted yet — keep the
-                // session so the next poll restarts the chain.
+                // session so the next poll restarts the chain, from the host's side.
+                m_PairingStage[uuid] = PairingChain::Stage::Contacting;
                 break;
 
             case PairingChain::Outcome::HostBusy:
@@ -1527,7 +1553,12 @@ void ComputerManager::startPairingChain(const QString& uuid)
                 break;
             }
 
+            // A session that ended takes its stage along.
+            if (!m_ActivePairings.contains(uuid)) m_PairingStage.remove(uuid);
             m_SubmitInFlight.remove(uuid);
+        },
+        [this, uuid](PairingChain::Stage stage) {
+            if (m_ActivePairings.contains(uuid)) m_PairingStage[uuid] = stage;
         });
 }
 
