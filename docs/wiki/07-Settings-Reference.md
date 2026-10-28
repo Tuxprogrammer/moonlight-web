@@ -18,7 +18,7 @@ All server configuration lives in a single JSON file managed by `backend/src/ser
 
 The flag carries over to the stream workers, to the login item the *Start at login* switch writes, and to the relaunch after an in-app update on Linux and macOS. The Windows and macOS installers rewrite their own login item on every update, without it: add it back there, or start the server from a unit of your own. The operator commands ([§3.7](03-Backend.md#37-headless-operator-cli)) read the HTTPS port from this file, so give them the same `--config`.
 
-Access is single-threaded, synchronous I/O. **Restart the server after a manual edit** (most keys are read at startup or on demand; the file is not watched). Documented file-only keys are seeded into the file at startup (`seedDocumentedDefaults()`) so they are discoverable.
+Access is single-threaded, synchronous I/O. **Restart the server after a manual edit** (most keys are read at startup or on demand; the file is not watched). To change a setting of a server that is running, use the admin page or `moonlightweb --set` ([§7.6](#76-from-a-terminal---get-and---set)): both go through the server, which applies the change at once and keeps the file its own. Documented file-only keys are seeded into the file at startup (`seedDocumentedDefaults()`) so they are discoverable.
 
 ## 7.2 Key reference
 
@@ -208,6 +208,43 @@ Authentication is unchanged: remote devices still need the admin PIN or the cert
 - Everything on this page is about the **certificate** and **the machine's own name**. The certificate is not needed for remote access as such: the entry link is served under the introduction server's certificate and the tunnel is bound to the machine's own key, so an instance with no domain and no PEM file is already reachable from anywhere ([Security §6.5](06-Security.md#65-tls)).
 - `unique_id` and `rendezvous_id` are untouched: the entry link keeps working alongside your own name, and restoring `"domain": "MW_DOMAIN"` simply leaves the instance with no public DNS name again.
 - The `stream` label is only reserved on the project's shared domain, never on yours.
+
+## 7.6 From a terminal: `--get` and `--set`
+
+`moonlightweb --set key=value` changes a setting of the **running** server, and `moonlightweb --get key` prints one. Like `--status` ([Backend §3.7](03-Backend.md#37-headless-operator-cli)) they go through the server's loopback API with the admin key, exactly as the admin page does, and **never write `settings.json`**: while the server runs the file is its own, and its next write would undo an edit made behind its back. A setting changed this way applies when the admin page's would: at once for most keys, on the next stream for the streaming ones.
+
+```sh
+moonlightweb --get all                        # every supported key, key=value
+moonlightweb --get https_port                 # just the value, for scripts
+moonlightweb --get all --json                 # one JSON object
+moonlightweb --set transport_mode=wss --set cert_auth_enabled=on
+docker exec moonlightweb moonlightweb --set instance_name="Living room"
+```
+
+Only the keys below are accepted, each mapped to the route the admin page writes it through. Anything else is refused with the list of supported keys.
+
+| Key | Values | Route |
+|---|---|---|
+| `transport_mode` | `auto` \| `all` \| `webrtc-media-udp` \| `webrtc-dc-udp` \| `webrtc-media-tcp` \| `webrtc-dc-tcp` \| `wss` | `POST /api/settings/streaming` |
+| `upnp_enabled` | bool | `POST /api/settings/streaming` |
+| `video_codec` | `h264` \| `hevc` \| `av1` | `POST /api/settings/streaming` |
+| `native_video_pipeline` | `auto` \| `d3d11` \| `d3d12` \| `vaapi` \| `vulkan` | `POST /api/settings/streaming` |
+| `cert_auth_enabled` | bool | `POST /api/admin/settings` |
+| `packet_marking` | bool | `POST /api/admin/settings` |
+| `stream_notifications` | bool | `POST /api/admin/settings` |
+| `debug_mode` | bool | `POST /api/admin/settings` |
+| `verbose_logs` | bool | `POST /api/admin/settings` |
+| `instance_name` | text, up to 32 characters; empty = the PC's name | `POST /api/admin/settings` |
+| `https_port` | 1–65535 | `POST /api/admin/settings` |
+
+- **Values.** A bool is `true`/`false`, `on`/`off`, `yes`/`no` or `1`/`0`. A choice is matched case-insensitively and stored in lower case. A number must be plain decimal and in range. `instance_name` is sent as typed: the server collapses its spaces, as it does for the admin page.
+- **All or nothing on the command line.** Every `--set` is checked before anything is sent. An unknown key, a bad value or the same key twice is refused and nothing changes. The keys are then sent as one request per route, streaming keys first, so a new `https_port` moves the listener only after the other request has landed. If the server refuses a request, the command says which keys it did not change.
+- **What is printed is what the server kept.** A value that differs from the one asked for is shown with the requested value beside it: `debug_mode` and `verbose_logs` stay on for a run started with `--debug` or `--verbose`, and the server tidies the spaces in `instance_name`.
+- **`https_port`** moves the listener at once, as from the admin page. The operator commands find the server through the port in `settings.json` (§7.1), so the next one follows it, provided it is given the server's `--config`.
+- **Exit codes**, the same for `--list-sessions` and `--revoke-session`: `0` done; `1` the server is not running, or refused (the message is on stderr); `2` the command line itself is wrong, and nothing was sent.
+- `--get` prints the value alone for one key and `key=value` lines for several. `debug_mode` and `verbose_logs` read as the mode in force, as the admin page shows them.
+
+Not offered: `allowed_transports` (not on this version's routes yet), secrets (`admin_password` has `--set-admin-password`, `local_key` is never handed out), Internet Access (`--enable-internet` records the consent it needs) and the file-only keys, which the server reads at startup: stop it, edit the file, start it.
 
 ---
 
