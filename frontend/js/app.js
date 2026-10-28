@@ -135,6 +135,7 @@ import { ourStunHost } from './api/IceServers.js';
 import { probeUdp } from './api/UdpProbe.js';
 import { InstanceMenu } from './ui/InstanceMenu.js';
 import { currentInstanceRef, importInstances, rememberInstance } from './util/instances.js';
+import { launchTransportPref } from './util/TransportChoice.js';
 
 // Every module above arrived and ran: the boot watchdog (bootWatch.js) stands down.
 window.mwBooted = true;
@@ -2018,6 +2019,12 @@ export const MoonlightApp = {
                 console.warn('[MW] Failed to parse streaming settings from localStorage:', e);
             }
         }
+
+        // Connection (Settings): a choice this page cannot run is sent as Automatic.
+        if (streamingSettings.transport_pref)
+            streamingSettings.transport_pref = launchTransportPref(
+                streamingSettings.transport_pref,
+            );
 
         // Session-only congestion-degradation overrides (bitrate/fps/transport).
         // They survive codec/HDR fallback relaunches within the same session and

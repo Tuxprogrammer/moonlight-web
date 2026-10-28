@@ -100,6 +100,12 @@ import {
     pyrowaveBlocker,
 } from '../util/PyrowaveCodec.js';
 import { CODEC_AUTO, codecAfterAutoMigration } from '../util/CodecAuto.js';
+import {
+    clampTransportPref,
+    normalizeAllowed,
+    normalizePref,
+    transportChoices,
+} from '../util/TransportChoice.js';
 
 const STORAGE_KEY = 'mw-streaming-settings';
 
@@ -149,6 +155,10 @@ export class SettingsView {
         this.onClose = onClose || (() => {});
 
         this._videoCodec = CODEC_AUTO;
+        // Connection (util/TransportChoice.js): this browser's preference, and
+        // the admin's policy it is chosen inside (/api/internet/status).
+        this._transportPref = 'auto';
+        this._allowedTransports = 'all';
         this._gamingMode = true;
         this._showPerformanceStats = false;
         this._streamBitrateMbps = 20;
@@ -240,6 +250,7 @@ export class SettingsView {
 
     async start() {
         await this._loadState();
+        await this._loadTransportPolicy();
         this._codecSupport = await this._checkCodecSupport();
         await this._loadPyrowaveHost();
         this._webgpuUsable = await this._checkWebGpuSupport();
@@ -573,6 +584,20 @@ export class SettingsView {
         }
     }
 
+    /**
+     * The admin's allowed transports, which bound the Connection menu. Kept at
+     * "all" when the server does not say (an older backend, or no answer): the
+     * launch then gets whatever the server allows.
+     */
+    async _loadTransportPolicy() {
+        try {
+            const status = await BackendClient.getInternetStatus();
+            this._allowedTransports = normalizeAllowed(status?.allowed_transports);
+        } catch (err) {
+            console.warn('[Settings] Could not read the allowed transports:', err);
+        }
+    }
+
     /** Apply a settings object to internal state (normalises field names). */
     _applySettings(data) {
         // The server's default is HEVC on a first visit: it moves to Auto
@@ -630,6 +655,7 @@ export class SettingsView {
         this._gamepadProfile = profile === 'x360' || profile === 'ds4' ? profile : 'auto';
         const algo = data.video_enhancement_algo;
         this._videoEnhancementAlgo = ENHANCER_CHOICES.some((c) => c.value === algo) ? algo : 'auto';
+        this._transportPref = normalizePref(data.transport_pref);
         this._powerSave = data.power_save === true;
         this._powerSaveBackup =
             data.power_save_backup && typeof data.power_save_backup === 'object'
@@ -823,6 +849,8 @@ export class SettingsView {
             power_save: this._powerSave,
             power_save_backup: this._powerSaveBackup,
             gamepad_profile: this._gamepadProfile,
+            // Sent in the launch body; the backend filters the chain by it.
+            transport_pref: this._transportPref,
         };
         localStorage.setItem(STORAGE_KEY, JSON.stringify(settings));
 
@@ -1275,6 +1303,10 @@ export class SettingsView {
             // which is 'auto' unless someone once ran a debug build here.
             const gpProfileEl = this.container.querySelector('#settings-gamepad-profile');
             const gamepadProfile = gpProfileEl ? gpProfileEl.value : this._gamepadProfile;
+            // Absent when there is nothing to choose: the stored choice stays
+            // for a page where it can run again (the launch clamps it).
+            const prefEl = this.container.querySelector('#settings-transport-pref');
+            const transportPref = prefEl ? normalizePref(prefEl.value) : this._transportPref;
 
             // Update internal state
             this._videoCodec = codec;
@@ -1297,6 +1329,7 @@ export class SettingsView {
             this._videoEnhancement = videoEnhancement;
             this._videoEnhancementAlgo = videoEnhancementAlgo;
             this._gamepadProfile = gamepadProfile;
+            this._transportPref = transportPref;
 
             // Save to localStorage and server (if localhost)
             await this._saveToStorage();
@@ -1334,6 +1367,7 @@ export class SettingsView {
         this._videoEnhancementAlgo = 'auto';
         this._powerSave = false;
         this._powerSaveBackup = null;
+        this._transportPref = 'auto';
         // Bitrate follows the 1080p60 SDR 16:9 reference
         this._streamBitrateMbps = this._computeAutoBitrate(1080, 60, '16:9', false, false);
 
@@ -1433,6 +1467,37 @@ export class SettingsView {
     }
 
     // --- Rendering ---
+
+    /**
+     * Connection: Automatic, WebRTC or WebSocket — only what the admin allows
+     * and this page can run (util/TransportChoice.js). Nothing to choose, no
+     * field: Automatic is then the only answer anyway.
+     */
+    _renderConnectionField() {
+        const choices = transportChoices({ allowed: this._allowedTransports });
+        if (choices.length <= 1) return '';
+        const current = clampTransportPref(this._transportPref, choices);
+        const labels = {
+            auto: t('settings.connectionAuto'),
+            webrtc: t('settings.connectionWebrtc'),
+            wss: t('settings.connectionWss'),
+        };
+        return `
+                    <div class="settings-field">
+                        <label class="settings-label" for="settings-transport-pref">
+                            ${t('settings.connection')}
+                        </label>
+                        <span class="setting-desc">${t('settings.connectionDesc')}</span>
+                        <select id="settings-transport-pref" class="settings-select">
+                            ${choices
+                                .map(
+                                    (c) =>
+                                        `<option value="${c}" ${c === current ? 'selected' : ''}>${escapeHtml(labels[c])}</option>`,
+                                )
+                                .join('')}
+                        </select>
+                    </div>`;
+    }
 
     render() {
         // Power Saving forces (and grays out) HDR, VSync, codec and enhancement.
@@ -1855,6 +1920,8 @@ export class SettingsView {
                         </select>
                         ${codecHintHtml}
                     </div>
+
+                    ${this._renderConnectionField()}
 
                     <div class="settings-field">
                         <label class="settings-checkbox-label">
@@ -2345,6 +2412,9 @@ export class SettingsView {
 
         const workerCheck = this.container.querySelector('#settings-video-worker');
         if (workerCheck) workerCheck.addEventListener('change', () => this._autoSave());
+
+        const transportPref = this.container.querySelector('#settings-transport-pref');
+        if (transportPref) transportPref.addEventListener('change', () => this._autoSave());
 
         const veSelect = this.container.querySelector('#settings-video-enhancement');
         if (veSelect) veSelect.addEventListener('change', () => this._autoSave());
