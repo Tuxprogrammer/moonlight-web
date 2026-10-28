@@ -461,6 +461,9 @@ describe('ClipboardPanel', () => {
             storage: memoryStorage(state.settings),
             clipboard: state.clipboard,
             toast: state.toast,
+            // A Windows host: the type method 'auto' sends text there, which
+            // is what these tests pin. Key presses: ClipboardTypeKeys.test.js.
+            hostOs: () => 'windows',
             ...overrides,
         });
     const $ = (sel) => container.querySelector(sel);

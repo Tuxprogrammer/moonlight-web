@@ -107,6 +107,7 @@ import {
     transportChoices,
 } from '../util/TransportChoice.js';
 import { markSignedOut } from '../util/oidcLogin.js';
+import { TYPE_METHODS } from './ClipboardPanel.js';
 
 const STORAGE_KEY = 'mw-streaming-settings';
 
@@ -174,9 +175,11 @@ export class SettingsView {
         // Enter fullscreen at launch (off by default): asked on the launch
         // click, the only moment a browser lets a page go fullscreen.
         this._fullscreenOnStart = false;
-        // Clipboard (ui/ClipboardPanel.js reads them at use): both off.
+        // Clipboard (ui/ClipboardPanel.js reads them at use): both off, and
+        // Type on host's method decided from the host.
         this._clipboardSyncOnFocus = false;
         this._clipboardCtrlVTypes = false;
+        this._clipboardTypeMethod = 'auto';
         this._touchSensitivity = 2.2;
         this._mouseSensitivity = 1;
         // Mobile only: direct touch-screen input (absolute) instead of the
@@ -643,6 +646,9 @@ export class SettingsView {
         this._fullscreenOnStart = data.fullscreen_on_start === true;
         this._clipboardSyncOnFocus = data.clipboard_sync_on_focus === true;
         this._clipboardCtrlVTypes = data.clipboard_ctrlv_types === true;
+        this._clipboardTypeMethod = TYPE_METHODS.includes(data.clipboard_type_method)
+            ? data.clipboard_type_method
+            : 'auto';
         this._touchSensitivity =
             typeof data.touch_sensitivity === 'number' && data.touch_sensitivity > 0
                 ? data.touch_sensitivity
@@ -857,6 +863,7 @@ export class SettingsView {
             fullscreen_on_start: this._fullscreenOnStart,
             clipboard_sync_on_focus: this._clipboardSyncOnFocus,
             clipboard_ctrlv_types: this._clipboardCtrlVTypes,
+            clipboard_type_method: this._clipboardTypeMethod,
             power_save: this._powerSave,
             power_save_backup: this._powerSaveBackup,
             gamepad_profile: this._gamepadProfile,
@@ -1369,6 +1376,7 @@ export class SettingsView {
         this._fullscreenOnStart = false;
         this._clipboardSyncOnFocus = false;
         this._clipboardCtrlVTypes = false;
+        this._clipboardTypeMethod = 'auto';
         this._touchSensitivity = 2.2;
         this._mouseSensitivity = 1;
         this._touchScreen = false;
@@ -1991,6 +1999,25 @@ export class SettingsView {
                         <span class="setting-desc">${t('settings.clipboardCtrlVTypesDesc')}</span>
                     </div>
 
+                    <div class="settings-field">
+                        <label class="settings-label" for="settings-clipboard-type-method">
+                            ${t('settings.clipboardTypeMethod')}
+                        </label>
+                        <span class="setting-desc">${t('settings.clipboardTypeMethodDesc')}</span>
+                        <select id="settings-clipboard-type-method" class="settings-select">
+                            ${[
+                                { value: 'auto', label: t('settings.clipboardTypeMethodAuto') },
+                                { value: 'keys', label: t('settings.clipboardTypeMethodKeys') },
+                                { value: 'text', label: t('settings.clipboardTypeMethodText') },
+                            ]
+                                .map(
+                                    (m) =>
+                                        `<option value="${m.value}" ${m.value === this._clipboardTypeMethod ? 'selected' : ''}>${this.esc(m.label)}</option>`,
+                                )
+                                .join('')}
+                        </select>
+                    </div>
+
                     <!-- Allow tearing: disables VSync pacing + desynchronized
                          canvas. Dimmed + locked "(unavailable)" outside Chromium
                          desktop — Safari/Firefox ignore the flag and mobile
@@ -2403,6 +2430,16 @@ export class SettingsView {
         if (clipTypesCheck)
             clipTypesCheck.addEventListener('change', () => {
                 this._clipboardCtrlVTypes = clipTypesCheck.checked;
+                this._autoSave();
+            });
+
+        const clipMethodSel = /** @type {HTMLSelectElement|null} */ (
+            this.container.querySelector('#settings-clipboard-type-method')
+        );
+        if (clipMethodSel)
+            clipMethodSel.addEventListener('change', () => {
+                if (!TYPE_METHODS.includes(clipMethodSel.value)) return;
+                this._clipboardTypeMethod = clipMethodSel.value;
                 this._autoSave();
             });
 

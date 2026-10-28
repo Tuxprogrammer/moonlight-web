@@ -2,9 +2,9 @@
  * MoonlightWeb — TNR suite. Copyright (C) 2026 Bruno Martin.
  * GPLv3 — see repository LICENSE.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import { StreamView } from '../js/ui/StreamView.js';
-import { ChordGesture } from '../js/ui/ClipboardPanel.js';
+import { ChordGesture, TYPE_INTERVAL_MS } from '../js/ui/ClipboardPanel.js';
 import { StreamRemoteMenu } from '../js/ui/StreamRemoteMenu.js';
 
 /**
@@ -442,5 +442,92 @@ describe("the TV remote's menu", () => {
         document.querySelector('[data-act="clipboard"]').click();
         expect(v._remoteMenu.isOpen).toBe(false);
         expect(v._toggleClipboardPanel).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('Type on host as key presses, from the stream', () => {
+    /** A stream view with a real panel, built the way the stream builds it. */
+    function built(extra = {}) {
+        document.body.innerHTML = '<div id="hdr"><button id="btn-stream-quit"></button></div>';
+        localStorage.removeItem('mw-streaming-settings');
+        const v = view({
+            _rootEl: document.body,
+            _mouseAllowed: true,
+            _playerMode: false,
+            _nativeHost: false,
+            host: { hostOs: 'unknown' },
+            _clipboardPanel: null,
+            _onClipboardPanelOpen: vi.fn(),
+            _onClipboardPanelClose: vi.fn(),
+            ...extra,
+        });
+        P._buildClipboardPanel.call(v, document.getElementById('hdr'));
+        return v;
+    }
+
+    afterEach(() => {
+        vi.useRealTimers();
+        localStorage.removeItem('mw-streaming-settings');
+    });
+
+    it('hands the panel the host OS and whether it is the server’s own machine', () => {
+        const v = built();
+        expect(v._clipboardPanel.typeMethod).toBe('keys');
+        v.host.hostOs = 'windows';
+        expect(v._clipboardPanel.typeMethod).toBe('text');
+        v.host.hostOs = 'linux';
+        v._nativeHost = true;
+        expect(v._clipboardPanel.typeMethod).toBe('text');
+    });
+
+    it('works before the host is known', () => {
+        const v = built({ host: null });
+        expect(v._clipboardPanel.typeMethod).toBe('keys');
+    });
+
+    it('the key presses go out; the viewer’s own keys, typed meanwhile, do not', () => {
+        vi.useFakeTimers();
+        const v = built({ host: { hostOs: 'linux' } });
+        v._clipboardPanel.open();
+        v._clipboardPanel.typeText('Ab');
+        // A key typed while the panel types, focus on the picture.
+        v.handleKeyDown(down('KeyZ', 'z'));
+        v.handleKeyUp(up('KeyZ', 'z'));
+        v.handleKeyDown(down('ShiftLeft', 'Shift', { shiftKey: true }));
+        v.handleKeyUp(up('ShiftLeft', 'Shift'));
+        vi.advanceTimersByTime(TYPE_INTERVAL_MS * 3);
+        expect(v.sent.map((m) => [m.type, m.keyCode, m.char ?? null])).toEqual([
+            ['keydown', 0x10, null],
+            ['keydown', 0x41, 'A'],
+            ['keyup', 0x41, 'A'],
+            ['keyup', 0x10, null],
+            ['keydown', 0x42, 'b'],
+            ['keyup', 0x42, 'b'],
+        ]);
+        expect(v.sent.some((m) => m.keyCode === 0x5a)).toBe(false);
+        v._clipboardPanel.destroy();
+    });
+
+    it('Ctrl+V typing: Ctrl is let go before the first key press', () => {
+        vi.useFakeTimers();
+        const v = built();
+        localStorage.setItem(
+            'mw-streaming-settings',
+            JSON.stringify({ clipboard_ctrlv_types: true, clipboard_type_method: 'keys' }),
+        );
+        v.handleKeyDown(down('ControlLeft', 'Control', { ctrlKey: true }));
+        v.handleKeyDown(down('KeyV', 'v', { ctrlKey: true }));
+        v.handlePaste({
+            target: document.body,
+            preventDefault() {},
+            clipboardData: { getData: () => 'hi' },
+        });
+        vi.advanceTimersByTime(TYPE_INTERVAL_MS * 3);
+        const ctrlUp = v.sent.findIndex((m) => m.type === 'keyup' && m.code === 'ControlLeft');
+        const firstKey = v.sent.findIndex((m) => m.char === 'h');
+        expect(ctrlUp).toBeGreaterThanOrEqual(0);
+        expect(firstKey).toBeGreaterThan(ctrlUp);
+        expect(v.sent.filter((m) => m.chord).every((m) => !m.ctrlKey)).toBe(true);
+        v._clipboardPanel.destroy();
     });
 });

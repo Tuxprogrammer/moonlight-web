@@ -35,7 +35,7 @@ vi.mock('../js/i18n/i18n.js', () => ({
 }));
 
 import { SettingsView } from '../js/ui/SettingsView.js';
-import { readClipboardPrefs } from '../js/ui/ClipboardPanel.js';
+import { readClipboardPrefs, readTypeMethod } from '../js/ui/ClipboardPanel.js';
 
 const stored = () => JSON.parse(localStorage.getItem('mw-streaming-settings') || '{}');
 
@@ -99,5 +99,70 @@ describe('SettingsView: the clipboard settings', () => {
         await view._resetDefaults();
         expect(stored().clipboard_sync_on_focus).toBe(false);
         expect(stored().clipboard_ctrlv_types).toBe(false);
+    });
+
+    describe('Type using key presses', () => {
+        it('is a choice of three, Automatic by default, with its explanation', () => {
+            mount();
+            const sel = $('#settings-clipboard-type-method');
+            expect(sel.tagName).toBe('SELECT');
+            expect([...sel.options].map((o) => o.value)).toEqual(['auto', 'keys', 'text']);
+            expect([...sel.options].map((o) => o.textContent)).toEqual([
+                'text:settings.clipboardTypeMethodAuto',
+                'text:settings.clipboardTypeMethodKeys',
+                'text:settings.clipboardTypeMethodText',
+            ]);
+            expect(sel.value).toBe('auto');
+            expect($('label[for="settings-clipboard-type-method"]').textContent.trim()).toBe(
+                'text:settings.clipboardTypeMethod',
+            );
+            expect(view.container.innerHTML).toContain('text:settings.clipboardTypeMethodDesc');
+        });
+
+        it('saves a choice where the clipboard panel reads it', async () => {
+            mount();
+            const sel = $('#settings-clipboard-type-method');
+            sel.value = 'keys';
+            sel.dispatchEvent(new Event('change'));
+            await vi.waitFor(() => expect(stored().clipboard_type_method).toBe('keys'));
+            expect(readTypeMethod()).toBe('keys');
+            sel.value = 'text';
+            sel.dispatchEvent(new Event('change'));
+            await vi.waitFor(() => expect(stored().clipboard_type_method).toBe('text'));
+            expect(readTypeMethod()).toBe('text');
+        });
+
+        it('reads it back from storage, and keeps it through another save', async () => {
+            view._applySettings({ clipboard_type_method: 'text' });
+            mount();
+            expect($('#settings-clipboard-type-method').value).toBe('text');
+            await view._saveToStorage();
+            expect(stored().clipboard_type_method).toBe('text');
+        });
+
+        it('an unknown value reads as Automatic', () => {
+            view._applySettings({ clipboard_type_method: 'morse' });
+            expect(view._clipboardTypeMethod).toBe('auto');
+            view._applySettings({ clipboard_type_method: 1 });
+            expect(view._clipboardTypeMethod).toBe('auto');
+        });
+
+        it('a value picked outside the list is not saved', async () => {
+            mount();
+            const sel = $('#settings-clipboard-type-method');
+            const opt = document.createElement('option');
+            opt.value = 'bogus';
+            sel.appendChild(opt);
+            sel.value = 'bogus';
+            sel.dispatchEvent(new Event('change'));
+            await view._saveToStorage();
+            expect(stored().clipboard_type_method).toBe('auto');
+        });
+
+        it('reset puts it back on Automatic', async () => {
+            view._applySettings({ clipboard_type_method: 'keys' });
+            await view._resetDefaults();
+            expect(stored().clipboard_type_method).toBe('auto');
+        });
     });
 });

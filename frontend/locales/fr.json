@@ -545,7 +545,12 @@
         "clipboardSyncOnFocusDesc": "Quand tu reviens sur le stream, le texte copié sur cet appareil part dans le presse-papiers de l’hôte, prêt pour son propre Ctrl+V. Seulement avec un hôte qui partage son presse-papiers (la machine du serveur elle-même). Chrome et Edge demandent la permission une fois ; Firefox affiche à chaque fois un bouton Coller sur lequel cliquer ; Safari peut refuser.",
         "clipboardCtrlVTypes": "Ctrl+V tape mon presse-papiers",
         "clipboardCtrlVTypesDesc": "Pour un hôte dont le presse-papiers ne peut pas être partagé : Ctrl+V (Cmd+V sur Mac) tape le texte copié sur cet appareil au lieu de coller le presse-papiers de l’hôte. Désactivé, Ctrl+V arrive sur l’hôte comme une touche, comme avant.",
-        "logoutDescOidc": "Met fin à la session de ce navigateur et arrête le flux en cours. Votre fournisseur d’identité, lui, vous garde connecté : sur un ordinateur qui n’est pas le vôtre, déconnectez-vous aussi de celui-ci."
+        "logoutDescOidc": "Met fin à la session de ce navigateur et arrête le flux en cours. Votre fournisseur d’identité, lui, vous garde connecté : sur un ordinateur qui n’est pas le vôtre, déconnectez-vous aussi de celui-ci.",
+        "clipboardTypeMethod": "Taper avec des appuis de touches (plus fiable sur les hôtes Linux ; les caractères non ASCII passent toujours par la saisie Unicode)",
+        "clipboardTypeMethodDesc": "Comment Taper sur l’hôte, et Ctrl+V quand il tape, saisit le texte. Avec les appuis de touches, chaque caractère qui a une touche sur un clavier américain (lettres, chiffres, ponctuation, espace, Tab, Entrée) est tapé avec cette touche, avec Maj quand il le faut ; le reste (é, 日本, émojis) passe toujours par la saisie Unicode, à sa place. Plus fiable sur un hôte Linux, où certaines applications déforment la saisie Unicode, mais l’hôte doit utiliser une disposition de clavier américaine, Verr. Maj désactivé. Automatique tape des touches sur un hôte Linux ou non identifié, et du texte Unicode sur Windows, macOS et la machine du serveur.",
+        "clipboardTypeMethodAuto": "Automatique",
+        "clipboardTypeMethodKeys": "Appuis de touches",
+        "clipboardTypeMethodText": "Texte Unicode"
     },
     "admin": {
         "title": "Paramètres serveur",
@@ -1038,7 +1043,9 @@
         "copyFailed": "Le navigateur a refusé la copie. Sélectionne le texte et copie-le toi-même.",
         "hostChangedKept": "Le presse-papiers de l’hôte a changé. Ta modification est conservée.",
         "focusSyncUnavailable": "Ce navigateur ne sait pas lire le presse-papiers de lui-même : ton presse-papiers ne te suivra pas sur l’hôte. Utilise le panneau du presse-papiers ou Ctrl+V.",
-        "focusSyncDenied": "L’accès au presse-papiers a été refusé : ton presse-papiers ne te suivra pas sur l’hôte pendant cette session. Autorise-le dans les réglages du site, ou désactive l’option."
+        "focusSyncDenied": "L’accès au presse-papiers a été refusé : ton presse-papiers ne te suivra pas sur l’hôte pendant cette session. Autorise-le dans les réglages du site, ou désactive l’option.",
+        "methodKeys": "Les caractères d’un clavier américain sont tapés avec des appuis de touches, les autres par saisie Unicode (Réglages : Taper avec des appuis de touches).",
+        "methodText": "Le texte est tapé par saisie Unicode (Réglages : Taper avec des appuis de touches)."
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",
