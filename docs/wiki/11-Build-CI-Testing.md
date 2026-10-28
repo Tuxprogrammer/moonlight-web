@@ -119,6 +119,8 @@ There is no `edge` and no nightly: an ordinary day of commits publishes nothing,
 
 **One job per architecture on its own native runner** — `ubuntu-latest` and `ubuntu-24.04-arm` (free for public repositories) — each pushing an *untagged* blob with `push-by-digest=true`; a `merge` job then stitches the two digests into one manifest list with `docker buildx imagetools create` and applies every tag once. Tagging from the per-arch jobs would have the two architectures overwrite each other. QEMU is deliberately not used: emulating a full Qt + libdatachannel C++ build turns 20 minutes into hours and regularly hits the job timeout. The BuildKit cache is scoped per architecture (`scope=docker-amd64` / `-arm64`) — one shared scope has the two runners evict each other's layers on every run.
 
+**An `entrypoint` job gates both builds**: `shellcheck` on `docker/entrypoint.sh` and `docker/test-entrypoint.sh`, then the test script itself — the entrypoint run against a stub server on the runner (non-root, directories made unwritable with `chmod`), then in `debian:trixie-slim` containers for what only a container shows: root with `--cap-drop ALL` on a volume owned by another uid, `--cap-add DAC_OVERRIDE`, `--user`, `--read-only` with and without a tmpfs, a `:ro` mount. About a minute, and both tools are preinstalled on `ubuntu-latest`; every run is under `timeout`, so an entrypoint that loops fails the job instead of hanging it. Locally: `bash docker/test-entrypoint.sh` (the container half is skipped without docker, or with `MW_TEST_DOCKER=0`).
+
 Triggers, and the reasoning behind each:
 
 | Trigger | Effect |
