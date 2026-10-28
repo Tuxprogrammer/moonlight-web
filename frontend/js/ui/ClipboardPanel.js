@@ -28,8 +28,10 @@
  *    the host clipboard, and Send sets it (`clipboardset`) without pressing
  *    anything.
  *  - Typing (every other host — GameStream has no clipboard channel): Send
- *    types the text on the host through the `textinput` path, one character
- *    per message at a steady pace, with a cap, a progress bar and Cancel.
+ *    types the text on the host, one character per step at a steady pace,
+ *    with a cap, a progress bar and Cancel. A character goes either through
+ *    the `textinput` path or, when it has a key on a US keyboard and the
+ *    setting says so, as that key pressed (`clipboard_type_method`).
  * "Copy to this device" writes the box to the local clipboard; the click is
  * the gesture `writeText` needs.
  *
@@ -70,6 +72,143 @@ const PASTE_TOAST_STEPS = Math.ceil(1000 / TYPE_INTERVAL_MS);
 
 /** Windows virtual key of Enter: a line break is typed as the key. */
 const VK_RETURN = 0x0d;
+
+/** Windows virtual key of Shift, as the touch keyboard's latched Shift sends it. */
+const VK_SHIFT = 0x10;
+
+/**
+ * How Type on host types a character that has a key on a US keyboard
+ * (the setting `clipboard_type_method`): 'auto' decides from the host
+ * (typesWithKeys), 'keys' presses the key, 'text' sends it as Unicode text.
+ */
+export const TYPE_METHODS = ['auto', 'keys', 'text'];
+
+/** The US layout's punctuation keys: [unshifted, shifted, virtual key]. */
+const US_OEM_KEYS = [
+    ['`', '~', 0xc0],
+    ['-', '_', 0xbd],
+    ['=', '+', 0xbb],
+    ['[', '{', 0xdb],
+    [']', '}', 0xdd],
+    ['\\', '|', 0xdc],
+    [';', ':', 0xba],
+    ["'", '"', 0xde],
+    [',', '<', 0xbc],
+    ['.', '>', 0xbe],
+    ['/', '?', 0xbf],
+];
+
+/** The symbols over the digits 0-9 on a US keyboard. */
+const US_SHIFTED_DIGITS = ')!@#$%^&*(';
+
+/** Character → { vk, shift } for every character a US keyboard types (Enter aside). */
+const US_KEYS = (() => {
+    const map = new Map();
+    for (let c = 0x41; c <= 0x5a; c++) {
+        map.set(String.fromCharCode(c + 0x20), { vk: c, shift: false });
+        map.set(String.fromCharCode(c), { vk: c, shift: true });
+    }
+    for (let d = 0; d <= 9; d++) {
+        map.set(String(d), { vk: 0x30 + d, shift: false });
+        map.set(US_SHIFTED_DIGITS[d], { vk: 0x30 + d, shift: true });
+    }
+    for (const [lo, hi, vk] of US_OEM_KEYS) {
+        map.set(lo, { vk, shift: false });
+        map.set(hi, { vk, shift: true });
+    }
+    map.set(' ', { vk: 0x20, shift: false });
+    map.set('\t', { vk: 0x09, shift: false });
+    return map;
+})();
+
+/**
+ * The key that types `ch` on a US keyboard, and whether it needs Shift; null
+ * for a character no US key types (é, 日, an emoji, a control character). A
+ * line break is not here: typing presses Enter for it in either method.
+ *
+ * @param {string} ch one character
+ * @returns {{ vk: number, shift: boolean } | null}
+ */
+export function usKeyFor(ch) {
+    if (typeof ch !== 'string' || ch.length !== 1) return null;
+    const key = US_KEYS.get(ch);
+    return key ? { vk: key.vk, shift: key.shift } : null;
+}
+
+/**
+ * The messages of one key press, as the touch keyboard's bar sends a latched
+ * Shift and a character (StreamViewKeyboard._toggleMod, _sendToolbarKey,
+ * _releaseLatchedMods): Shift down when needed, the key down and up with its
+ * character as a chord (`char`, `chord: true`: a host that can presses its
+ * own key for the character, InputMsg::resolveKey; any other one takes the US
+ * position), Shift up last. A key without a character (Tab) is a plain press.
+ * The press is whole: nothing is left down between two characters.
+ *
+ * @param {{ vk: number, shift: boolean, char: string|null, code?: string }} stroke
+ * @returns {object[]}
+ */
+export function keyStrokeMessages(stroke) {
+    const mods = (shift) => ({ ctrlKey: false, shiftKey: shift, altKey: false, metaKey: false });
+    const shiftKey = (type, held) => ({
+        type,
+        keyCode: VK_SHIFT,
+        code: '',
+        key: '',
+        ...mods(held),
+    });
+    /** @type {Record<string, unknown>} */
+    const key = { keyCode: stroke.vk, code: '', key: '', ...mods(stroke.shift) };
+    if (stroke.char) {
+        key.char = stroke.char;
+        key.chord = true;
+    } else {
+        key.code = stroke.code || '';
+        key.key = stroke.code || '';
+        key.char = null;
+    }
+    const msgs = [];
+    if (stroke.shift) msgs.push(shiftKey('keydown', true));
+    msgs.push({ type: 'keydown', ...key }, { type: 'keyup', ...key });
+    if (stroke.shift) msgs.push(shiftKey('keyup', false));
+    return msgs;
+}
+
+/**
+ * The type method of this browser: 'auto' unless 'keys' or 'text' is stored.
+ *
+ * @param {Storage|null} [storage]
+ * @returns {'auto'|'keys'|'text'}
+ */
+export function readTypeMethod(storage) {
+    try {
+        const s = storage === undefined ? globalThis.localStorage : storage;
+        const raw = s ? s.getItem(SETTINGS_KEY) : null;
+        const method = raw ? JSON.parse(raw).clipboard_type_method : undefined;
+        if (method === 'keys' || method === 'text') return method;
+    } catch {
+        /* no storage, or not JSON: the default */
+    }
+    return 'auto';
+}
+
+/**
+ * Whether typing presses the US key of a character, rather than sending it as
+ * text. 'auto' presses keys where text may come out mangled: a Linux host,
+ * whose Sunshine types text as Ctrl+Shift+U and hex, and an unidentified one
+ * (a TTL of 64 is Linux or macOS, mostly Linux) — the hosts StreamViewKeyboard
+ * warns about. Windows and macOS inject text directly, in any layout, and the
+ * server's own machine types it in its real layout: text there.
+ *
+ * @param {string|undefined} method one of TYPE_METHODS
+ * @param {{ hostOs?: string, nativeHost?: boolean }} host
+ */
+export function typesWithKeys(method, host = {}) {
+    if (method === 'keys') return true;
+    if (method === 'text') return false;
+    if (host.nativeHost) return false;
+    const os = (host.hostOs || '').toLowerCase();
+    return os !== 'windows' && os !== 'macos';
+}
 
 /**
  * The two clipboard settings of this browser, off unless stored as true.
@@ -115,15 +254,28 @@ export function capCodePoints(text, max) {
  * The text as typing sends it, in order: one `{ text }` step per code point
  * (Array.from, so a surrogate pair — an emoji — is never split) and
  * `{ enter: true }` for each line break (\r\n, \r or \n) — a key, since a
- * newline sent as text types nothing in most host apps. Each step is one
- * character of the progress bar.
+ * newline sent as text types nothing in most host apps. With `keys`, a
+ * character that has a US key is a `{ key }` step instead (keyStrokeMessages);
+ * the others stay text, each in its place. Each step is one character of the
+ * progress bar.
  *
- * @returns {Array<{ text?: string, enter?: boolean, chars: number }>}
+ * @param {string} text
+ * @param {{ keys?: boolean }} [opts]
+ * @returns {Array<{ text?: string, enter?: boolean,
+ *                   key?: { vk: number, shift: boolean, char: string|null, code?: string },
+ *                   chars: number }>}
  */
-export function typingSteps(text) {
-    return Array.from(text.replace(/\r\n?/g, '\n'), (ch) =>
-        ch === '\n' ? { enter: true, chars: 1 } : { text: ch, chars: 1 },
-    );
+export function typingSteps(text, opts = {}) {
+    return Array.from(text.replace(/\r\n?/g, '\n'), (ch) => {
+        if (ch === '\n') return { enter: true, chars: 1 };
+        const us = opts.keys ? usKeyFor(ch) : null;
+        if (!us) return { text: ch, chars: 1 };
+        const key =
+            ch === '\t'
+                ? { vk: us.vk, shift: false, char: null, code: 'Tab' }
+                : { vk: us.vk, shift: us.shift, char: ch };
+        return { key, chars: 1 };
+    });
 }
 
 /** The three modifiers of the control combos, as KeyboardEvent codes. */
@@ -232,7 +384,7 @@ export class ChordGesture {
 export class TextTyper {
     /**
      * @param {{ send: (msg: object) => void,
-     *           steps: Array<{ text?: string, enter?: boolean, chars: number }>,
+     *           steps: ReturnType<typeof typingSteps>,
      *           intervalMs?: number,
      *           onProgress?: (done: number, total: number) => void,
      *           onDone?: (cancelled: boolean) => void,
@@ -267,6 +419,10 @@ export class TextTyper {
             const mods = { ctrlKey: false, shiftKey: false, altKey: false, metaKey: false };
             this._opts.send({ type: 'keydown', ...key, ...mods });
             this._opts.send({ type: 'keyup', ...key, ...mods });
+        } else if (step.key) {
+            // The whole press in one go: a cancel or a teardown between two
+            // characters never leaves Shift, or the key, down on the host.
+            for (const msg of keyStrokeMessages(step.key)) this._opts.send(msg);
         } else {
             this._opts.send({ type: 'textinput', text: step.text });
         }
@@ -309,10 +465,14 @@ export class ClipboardPanel {
      *           storage?: Storage|null,
      *           clipboard?: { readText?: Function, writeText?: Function }|null,
      *           toast?: { info: Function, warning: Function }|null,
-     *           timers?: { setTimeout: Function, clearTimeout: Function } }} opts
+     *           timers?: { setTimeout: Function, clearTimeout: Function },
+     *           hostOs?: () => string,
+     *           nativeHost?: () => boolean }} opts
      *   canType: whether this viewer may use the keyboard on the host (a guest
      *   only when the invitation says so). onOpen: release what the host holds
      *   and free the pointer. onClose: the stream takes the keyboard back.
+     *   hostOs, nativeHost: what the type method 'auto' decides from, read when
+     *   typing starts (HostOsProbe may settle the OS during the session).
      */
     constructor(opts) {
         this._opts = opts;
@@ -384,6 +544,15 @@ export class ClipboardPanel {
 
     _storage() {
         return this._opts.storage;
+    }
+
+    /** How typing goes right now: 'keys' (US keys, text for the rest) or 'text'. */
+    get typeMethod() {
+        const host = {
+            hostOs: this._opts.hostOs ? this._opts.hostOs() : '',
+            nativeHost: this._opts.nativeHost ? !!this._opts.nativeHost() : false,
+        };
+        return typesWithKeys(readTypeMethod(this._storage()), host) ? 'keys' : 'text';
     }
 
     // ── Host messages ───────────────────────────────────────────────────
@@ -500,7 +669,7 @@ export class ClipboardPanel {
         if (!this._canType() || !text) return false;
         if (this._typer) this._typer.cancel();
         const capped = capCodePoints(text, MAX_TYPE_CHARS);
-        const steps = typingSteps(capped);
+        const steps = typingSteps(capped, { keys: this.typeMethod === 'keys' });
         if (steps.length === 0) return false;
         const truncated = capped.length < text.length;
         const typer = new TextTyper({
@@ -652,6 +821,7 @@ export class ClipboardPanel {
                         aria-label="${escapeHtml(t('clipboard.close'))}">×</button>
             </div>
             <p class="clipboard-panel-mode" id="${id}-mode"></p>
+            <p class="clipboard-panel-method" hidden></p>
             <label class="clipboard-panel-label" for="${id}-text">${escapeHtml(t('clipboard.textLabel'))}</label>
             <textarea id="${id}-text" class="clipboard-panel-text" rows="8"
                       spellcheck="false" autocomplete="off" autocapitalize="off"
@@ -709,6 +879,15 @@ export class ClipboardPanel {
                   ? t('clipboard.modeType')
                   : t('clipboard.modeNone');
         modeEl.dataset.mode = mode;
+        const methodEl = this._q('.clipboard-panel-method');
+        methodEl.hidden = mode !== 'type';
+        if (mode === 'type') {
+            const method = this.typeMethod;
+            methodEl.dataset.method = method;
+            methodEl.textContent = t(
+                method === 'keys' ? 'clipboard.methodKeys' : 'clipboard.methodText',
+            );
+        }
         send.textContent = mode === 'sync' ? t('clipboard.send') : t('clipboard.typeOnHost');
         send.hidden = mode === 'none';
         send.disabled = mode === 'none' || !this._text;

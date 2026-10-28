@@ -526,7 +526,12 @@
         "clipboardSyncOnFocus": "Sync my clipboard to the host when the stream gets focus",
         "clipboardSyncOnFocusDesc": "When you come back to the stream, the text you copied on this device goes to the host’s clipboard, ready for its own Ctrl+V. Only with a host that shares its clipboard (the server’s own machine). Chrome and Edge ask for permission once; Firefox shows a Paste button to click each time; Safari may refuse.",
         "clipboardCtrlVTypes": "Ctrl+V types my clipboard",
-        "clipboardCtrlVTypesDesc": "For a host whose clipboard can’t be shared: Ctrl+V (Cmd+V on a Mac) types the text you copied on this device instead of pasting the host’s own clipboard. Off, Ctrl+V reaches the host as a key, as before."
+        "clipboardCtrlVTypesDesc": "For a host whose clipboard can’t be shared: Ctrl+V (Cmd+V on a Mac) types the text you copied on this device instead of pasting the host’s own clipboard. Off, Ctrl+V reaches the host as a key, as before.",
+        "clipboardTypeMethod": "Type using key presses (more reliable on Linux hosts; non-ASCII still uses Unicode input)",
+        "clipboardTypeMethodDesc": "How Type on host, and Ctrl+V when it types, enters text. With key presses, each character that has a key on a US keyboard (letters, digits, punctuation, space, Tab, Enter) is pressed as that key, with Shift when it needs it; anything else (é, 日本, emoji) still goes as Unicode input, in its place. More reliable on a Linux host, where some apps garble Unicode input, but it assumes the host uses a US keyboard layout and has Caps Lock off. Automatic uses key presses on a Linux host or one that couldn’t be identified, and Unicode text on Windows, macOS and the server’s own machine.",
+        "clipboardTypeMethodAuto": "Automatic",
+        "clipboardTypeMethodKeys": "Key presses",
+        "clipboardTypeMethodText": "Unicode text"
     },
     "admin": {
         "title": "Server Settings",
@@ -951,7 +956,9 @@
         "copyFailed": "The browser refused the copy. Select the text and copy it yourself.",
         "hostChangedKept": "The host’s clipboard changed. Your edit is kept.",
         "focusSyncUnavailable": "This browser can’t read the clipboard on its own: your clipboard won’t follow you to the host. Use the clipboard panel or Ctrl+V.",
-        "focusSyncDenied": "Clipboard access was refused: your clipboard won’t follow you to the host this session. Allow it in the site’s settings, or turn the setting off."
+        "focusSyncDenied": "Clipboard access was refused: your clipboard won’t follow you to the host this session. Allow it in the site’s settings, or turn the setting off.",
+        "methodKeys": "Characters on a US keyboard are typed as key presses, the others as Unicode input (Settings: Type using key presses).",
+        "methodText": "Text is typed as Unicode input (Settings: Type using key presses)."
     },
     "transport": {
         "webrtcDcUdp": "WebRTC DataChannel (UDP)",

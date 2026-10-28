@@ -526,7 +526,12 @@
         "clipboardSyncOnFocus": "串流获得焦点时将我的剪贴板同步到主机",
         "clipboardSyncOnFocusDesc": "回到串流时，你在此设备上复制的文本会进入主机剪贴板，可直接在主机上按 Ctrl+V 粘贴。仅适用于共享剪贴板的主机（即服务器所在的机器）。Chrome 和 Edge 只会请求一次权限；Firefox 每次都会显示一个需要点击的“粘贴”按钮；Safari 可能会拒绝。",
         "clipboardCtrlVTypes": "Ctrl+V 输入我的剪贴板",
-        "clipboardCtrlVTypesDesc": "适用于无法共享剪贴板的主机：Ctrl+V（Mac 上为 Cmd+V）会输入你在此设备上复制的文本，而不是粘贴主机自己的剪贴板。关闭时，Ctrl+V 会像以前一样作为按键发送到主机。"
+        "clipboardCtrlVTypesDesc": "适用于无法共享剪贴板的主机：Ctrl+V（Mac 上为 Cmd+V）会输入你在此设备上复制的文本，而不是粘贴主机自己的剪贴板。关闭时，Ctrl+V 会像以前一样作为按键发送到主机。",
+        "clipboardTypeMethod": "使用按键输入（在 Linux 主机上更可靠；非 ASCII 字符仍使用 Unicode 输入）",
+        "clipboardTypeMethodDesc": "决定“在主机上输入”（以及 Ctrl+V 输入时）如何输入文本。使用按键时，美式键盘上有对应按键的字符（字母、数字、标点、空格、Tab、回车）会按下该键，需要时同时按住 Shift；其他字符（é、日本、表情符号）仍按原位置以 Unicode 输入。在 Linux 主机上更可靠，因为部分应用会弄乱 Unicode 输入，但前提是主机使用美式键盘布局且未开启大写锁定。“自动”在 Linux 主机或无法识别的主机上使用按键，在 Windows、macOS 和服务器本机上使用 Unicode 文本。",
+        "clipboardTypeMethodAuto": "自动",
+        "clipboardTypeMethodKeys": "按键",
+        "clipboardTypeMethodText": "Unicode 文本"
     },
     "admin": {
         "title": "服务器设置",
@@ -951,7 +956,9 @@
         "copyFailed": "浏览器拒绝了复制。请选中文本后自行复制。",
         "hostChangedKept": "主机剪贴板已更改，你的编辑已保留。",
         "focusSyncUnavailable": "此浏览器无法自行读取剪贴板：你的剪贴板不会同步到主机。请使用剪贴板面板或 Ctrl+V。",
-        "focusSyncDenied": "剪贴板访问被拒绝：本次会话中你的剪贴板不会同步到主机。请在网站设置中允许，或关闭此设置。"
+        "focusSyncDenied": "剪贴板访问被拒绝：本次会话中你的剪贴板不会同步到主机。请在网站设置中允许，或关闭此设置。",
+        "methodKeys": "美式键盘上的字符以按键输入，其他字符以 Unicode 输入（设置：使用按键输入）。",
+        "methodText": "文本以 Unicode 输入（设置：使用按键输入）。"
     },
     "transport": {
         "webrtcDcUdp": "WebRTC 数据通道（UDP）",
