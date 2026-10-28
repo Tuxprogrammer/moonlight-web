@@ -19,6 +19,7 @@
 #include "common/Edition.h"
 #include "common/Logger.h"
 #include "common/PairingCrypto.h"
+#include "streaming/TransportPolicy.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -1238,6 +1239,23 @@ void AppSettings::setTransportMode(const QString& mode)
     QJsonObject obj = readAll();
     obj["transport_mode"] = mode;
     writeAll(obj);
+}
+
+QString AppSettings::allowedTransports() const
+{
+    const QString v =
+        transportpolicy::normalizePolicy(readAll().value("allowed_transports").toString());
+    return v.isEmpty() ? QStringLiteral("all") : v;
+}
+
+bool AppSettings::setAllowedTransports(const QString& policy)
+{
+    const QString v = transportpolicy::normalizePolicy(policy);
+    if (v.isEmpty()) return false;
+    QJsonObject obj = readAll();
+    obj["allowed_transports"] = v;
+    writeAll(obj);
+    return true;
 }
 
 namespace {

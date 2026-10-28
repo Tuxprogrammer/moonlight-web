@@ -27,6 +27,7 @@
 #include <QJsonObject>
 #include <QRandomGenerator>
 #include <QSslSocket>
+#include "streaming/TransportPolicy.h"
 #include "streaming/TransportPriorities.h"
 #include <QTcpSocket>
 
@@ -314,13 +315,20 @@ QJsonObject InternetAccessManager::statusJson() const
     // puts it back in the selector for those who reach the host directly — a
     // LAN IP, or a domain of their own. It stays offered while `wss` is the
     // saved mode, so picking it does not take away the way back to "all".
-    QStringList availableTransports = TransportPriorities::orderedTransports();
-#ifndef QT_DEBUG
-    const QString savedMode = m_Settings->transportMode();
-    if (savedMode != QStringLiteral("all") && savedMode != QStringLiteral("wss"))
-        availableTransports.removeAll(QStringLiteral("wss"));
+    //
+    // The admin's allowed_transports narrows it further: "webrtc" never offers
+    // wss, and "wss" offers wss alone — the admin chose it, so it is shown in
+    // every build (TransportPolicy.h).
+#ifdef QT_DEBUG
+    constexpr bool debugBuild = true;
+#else
+    constexpr bool debugBuild = false;
 #endif
-    obj[QStringLiteral("available_transports")] = QJsonArray::fromStringList(availableTransports);
+    const QString allowed = m_Settings->allowedTransports();
+    obj[QStringLiteral("allowed_transports")] = allowed;
+    obj[QStringLiteral("available_transports")] = QJsonArray::fromStringList(
+        transportpolicy::availableTransports(TransportPriorities::orderedTransports(), allowed,
+                                             m_Settings->transportMode(), debugBuild));
     // The certificate this host serves. Empty on a plain install (the
     // self-signed one is generated and found by CertManager); a path when the
     // user dropped their own next to a domain they own.

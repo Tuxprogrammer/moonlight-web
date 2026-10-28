@@ -786,6 +786,44 @@ static int runNewPinCommand(quint16 persistedHttpsPort)
     return 0;
 }
 
+// `moonlightweb --allowed-transports all|webrtc|wss`: set which transport
+// families streams may use (the admin page's « Allowed transports »), on the
+// running instance, so a headless host can turn WebRTC or wss off.
+static int runAllowedTransportsCommand(quint16 persistedHttpsPort, const QString& value)
+{
+    QTextStream out(stdout);
+    const QString policy = transportpolicy::normalizePolicy(value);
+    if (policy.isEmpty()) {
+        out << "--allowed-transports takes all, webrtc or wss. Nothing was changed.\n";
+        out.flush();
+        return 1;
+    }
+    const QString base = findRunningInstance(persistedHttpsPort);
+    if (base.isEmpty()) {
+        out << "MoonlightWeb is not running — start it first "
+               "(sudo systemctl start moonlightweb).\n";
+        out.flush();
+        return 1;
+    }
+
+    QJsonObject body;
+    body["allowed_transports"] = policy;
+    const LoopbackReply reply = loopbackAdminPost(
+        base, "/api/settings/streaming", QJsonDocument(body).toJson(QJsonDocument::Compact));
+    if (!reply.ok) {
+        out << "Failed: "
+            << (reply.error.isEmpty() ? QStringLiteral("HTTP %1").arg(reply.httpStatus)
+                                      : reply.error)
+            << "\n";
+        out.flush();
+        return 1;
+    }
+    out << "\n  Allowed transports   " << reply.json.value("allowed_transports").toString()
+        << "\n\n  Streams started from now on use it.\n\n";
+    out.flush();
+    return 0;
+}
+
 // Read a secret from the terminal without echoing it. When stdin is a pipe
 // (the installer feeding a password it already collected) the line is simply
 // read: there is no terminal to turn echo off on.
@@ -1508,6 +1546,7 @@ int main(int argc, char* argv[])
                                                    "--enable-internet",
                                                    "--set-admin-password",
                                                    "--clear-admin-password",
+                                                   "--allowed-transports",
                                                    "--help",
                                                    "--help-all",
                                                    "-h",
@@ -1578,8 +1617,8 @@ int main(int argc, char* argv[])
                 // only administrators can write exists (UpdateApply.h).
                 for (const char* flag :
                      {"--native-bench", "--status", "--new-pin", "--set-admin-password",
-                      "--clear-admin-password", "--enable-internet", "--update-apply",
-                      "--open-on-desktop"}) {
+                      "--clear-admin-password", "--enable-internet", "--allowed-transports",
+                      "--update-apply", "--open-on-desktop"}) {
                     const size_t n = qstrlen(flag);
                     if (qstrncmp(argv[i], flag, int(n)) == 0 &&
                         (argv[i][n] == '\0' || argv[i][n] == '='))
@@ -1753,6 +1792,11 @@ int main(int argc, char* argv[])
     QCommandLineOption enableInternetOption(
         "enable-internet", "Enable the Internet link (asks for consent), then exit");
     parser.addOption(enableInternetOption);
+
+    QCommandLineOption allowedTransportsOption(
+        "allowed-transports",
+        "Set which transports streams may use (all, webrtc or wss), then exit", "policy");
+    parser.addOption(allowedTransportsOption);
 
     QCommandLineOption yesOption("yes", "Accept the --enable-internet agreement, or confirm "
                                         "--clear-admin-password, non-interactively");
@@ -2001,8 +2045,23 @@ int main(int argc, char* argv[])
     if (parser.isSet(enableInternetOption))
         return runEnableInternetCommand(appSettings.httpsPort(mw::edition::defaultHttpsPort()),
                                         parser.isSet(yesOption));
+    if (parser.isSet(allowedTransportsOption))
+        return runAllowedTransportsCommand(appSettings.httpsPort(mw::edition::defaultHttpsPort()),
+                                           parser.value(allowedTransportsOption));
 
     appSettings.seedDocumentedDefaults(); // write documented file-only keys if absent
+    // MW_ALLOWED_TRANSPORTS (.env, a unit's Environment=, a container's env):
+    // re-applied on every start, as docker/entrypoint.sh does with the ports.
+    if (const QString env = qEnvironmentVariable("MW_ALLOWED_TRANSPORTS"); !env.isEmpty()) {
+        if (appSettings.setAllowedTransports(env))
+            Logger::info(
+                QStringLiteral("[Settings] allowed_transports = %1 (MW_ALLOWED_TRANSPORTS)")
+                    .arg(appSettings.allowedTransports()));
+        else
+            Logger::warning(QStringLiteral("[Settings] MW_ALLOWED_TRANSPORTS=%1 ignored: it takes "
+                                           "all, webrtc or wss")
+                                .arg(env));
+    }
     appSettings.migrateHostApps();        // the betas' gamescope_apps → host_apps
 
     // The admin page's diagnostic boxes, on top of this run's flags.
@@ -3441,6 +3500,10 @@ int main(int argc, char* argv[])
         chainIn.mediaTrackAllowed = streamMediaTrackAllowed(reqCodec, host);
         // A page that found no RTCPeerConnection says so: no WebRTC rung then.
         chainIn.webrtcAvailable = transportchain::webrtcCapable(body);
+        // The admin's allowed transports filter the chain, and the browser's
+        // own Connection choice filters inside them.
+        chainIn.policy = appSettings.allowedTransports();
+        chainIn.pref = body.value(QStringLiteral("transport_pref")).toString();
         const transportchain::Chain chain = transportchain::build(chainIn);
         const QStringList transportChain = chain.rungs;
         // Asked for by name and taken away: the session that runs is NOT the one
@@ -5432,6 +5495,8 @@ int main(int argc, char* argv[])
         chainIn.videoEnhancement = true;
         chainIn.mediaTrackAllowed = streamMediaTrackAllowed(codec, host);
         chainIn.webrtcAvailable = transportchain::webrtcCapable(joinBody);
+        chainIn.policy = appSettings.allowedTransports();
+        chainIn.pref = joinBody.value(QStringLiteral("transport_pref")).toString();
         const transportchain::Chain built = transportchain::build(chainIn);
         logUdpRungsDropped(built, debugDropUdp);
         const QStringList chain = built.rungs;

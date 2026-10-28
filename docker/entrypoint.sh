@@ -76,6 +76,16 @@ case "${MW_UPNP:-}" in
     0|no|false) apply_setting upnp_enabled false ;;
     1|yes|true) apply_setting upnp_enabled true ;;
 esac
+# Which transports streams may use: all (default), webrtc, or wss — "wss"
+# turns WebRTC off for a LAN-only container, "webrtc" takes the WebSocket relay
+# away. The server applies MW_ALLOWED_TRANSPORTS itself too; refused here first
+# so a typo shows at the top of `docker logs`, not as a policy that never came.
+_transports=$(printf '%s' "${MW_ALLOWED_TRANSPORTS:-}" | tr 'A-Z' 'a-z')
+case "$_transports" in
+    "") ;;
+    all|webrtc|wss) apply_setting allowed_transports "\"$_transports\"" ;;
+    *) echo "entrypoint: MW_ALLOWED_TRANSPORTS=$MW_ALLOWED_TRANSPORTS ignored (all, webrtc or wss)" >&2 ;;
+esac
 
 # ── Stale single-instance lock ───────────────────────────────────────────────
 # main.cpp guards against a second server with a QLockFile whose staleness test

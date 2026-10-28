@@ -1277,6 +1277,8 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         obj["transport_mode"] = transportMode;
         obj["media_track_only_h264"] =
             (transportMode == "webrtc-media-udp" || transportMode == "webrtc-media-tcp");
+        // Which families a stream may use at all; transport_mode orders inside it.
+        obj["allowed_transports"] = appSettings.allowedTransports();
         // The picture chain of a native session (admin → Advanced), whether
         // this machine has a choice to make at all, and which.
         obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
@@ -1350,6 +1352,16 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                 return HttpResponse::error(
                     400, "native_video_pipeline must be auto, d3d11, d3d12, vaapi or vulkan");
             obj["native_video_pipeline"] = appSettings.nativeVideoPipeline();
+            obj["status"] = "saved";
+            hadChange = true;
+        }
+
+        // Same rule: a policy that is none of the three would read back as
+        // "all" and quietly allow what the admin meant to forbid.
+        if (body.contains("allowed_transports")) {
+            if (!appSettings.setAllowedTransports(body["allowed_transports"].toString()))
+                return HttpResponse::error(400, "allowed_transports must be all, webrtc or wss");
+            obj["allowed_transports"] = appSettings.allowedTransports();
             obj["status"] = "saved";
             hadChange = true;
         }
