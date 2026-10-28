@@ -91,6 +91,7 @@ void run_clipboard_agent_client_tests();
 void run_clipboard_agent_token_tests();
 void run_clipboard_provider_tests();
 void run_clipboard_message_tests();
+void run_operator_cli_tests();
 
 int main(int argc, char** argv)
 {
@@ -177,6 +178,7 @@ int main(int argc, char** argv)
     run_clipboard_agent_client_tests();
     run_clipboard_agent_token_tests();
     run_clipboard_provider_tests();
+    run_operator_cli_tests();
     // Last: it repoints the Logger singleton at its own temp files.
     run_logger_rotation_tests();
 

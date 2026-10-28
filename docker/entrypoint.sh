@@ -26,14 +26,16 @@ DATA="$HOME/.local/share/MoonlightWeb/MoonlightWeb"
 SETTINGS="$DATA/settings.json"
 
 # ── Operator commands run against the *other* process ────────────────────────
-# `--status`, `--new-pin`, `--set-admin-password`, `--clear-admin-password` and
-# `--enable-internet` talk to the instance that is already running and exit.
-# None of the preparation
+# `--status`, `--new-pin`, `--set-admin-password`, `--clear-admin-password`,
+# `--enable-internet`, `--list-sessions`, `--revoke-session`, `--set` and `--get`
+# talk to the instance that is already running and exit. None of the preparation
 # below applies to them — and the lock cleanup would be actively wrong, since
 # the lock they must not disturb belongs to a live server.
 for arg in "$@"; do
     case "$arg" in
-        --status|--new-pin|--set-admin-password|--clear-admin-password|--enable-internet|--version|-v|--help|-h)
+        --status|--new-pin|--set-admin-password|--clear-admin-password|--enable-internet|\
+        --list-sessions|--revoke-session|--revoke-session=*|--set|--set=*|--get|--get=*|\
+        --version|-v|--help|-h)
             exec "$APP" "$@"
             ;;
     esac

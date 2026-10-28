@@ -130,6 +130,7 @@ add_executable(run_tests
     test_clipboard_agent_client.cpp
     test_clipboard_agent_tokens.cpp
     test_clipboard_provider.cpp
+    test_operator_cli.cpp
     # In-scope production units (+ their real deps)
     # The host clipboard through an agent on the streamed host: the protocol,
     # the server's registry, socket and router, the worker's provider and the
@@ -189,6 +190,8 @@ add_executable(run_tests
     ${_src}/src/server/HomeScreenShell.cpp
     ${_src}/src/server/HttpParser.cpp
     ${_src}/src/server/RequestGuard.cpp
+    # The operator CLI's sessions and settings commands, against a fake server.
+    ${_src}/src/server/OperatorCli.cpp
     ${_src}/src/server/SessionPool.cpp
     # The single-tab control channel: the port it lands on when its own is taken.
     ${_src}/src/server/ControlChannel.cpp

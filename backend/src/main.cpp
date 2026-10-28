@@ -66,6 +66,7 @@
 #include "server/AppSettings.h"
 #include "common/DetachedProcess.h"
 #include "server/ClientUniqueId.h"
+#include "server/OperatorCli.h"
 #include "server/LogArchive.h"
 #include "server/routes/LogRoutes.h"
 #include "common/RunFlags.h"
@@ -515,13 +516,8 @@ static bool requestFocusAdmin(const QString& base)
 // They are queries against another process, so they run before the
 // single-instance lock is taken and never start a server of their own.
 
-struct LoopbackReply
-{
-    bool ok = false;    // transport-level success AND HTTP 2xx
-    int httpStatus = 0; // 0 when the request never completed
-    QJsonObject json;   // parsed body (empty when not JSON)
-    QString error;      // human-readable transport error
-};
+// Shared with the sessions and settings commands (server/OperatorCli.h).
+using LoopbackReply = mw::cli::Reply;
 
 // One loopback HTTPS call. The loopback certificate is the self-signed LAN one,
 // so peer verification is off — the peer is a socket on 127.0.0.1, which no
@@ -607,6 +603,33 @@ static QString findRunningInstance(quint16 persistedPort)
     if (p == 0) return QString();
     return p == 443 ? QStringLiteral("https://127.0.0.1")
                     : QStringLiteral("https://127.0.0.1:%1").arg(p);
+}
+
+// Run one of the sessions/settings commands (server/OperatorCli.h) against the
+// running instance. The instance is looked for only once the command line has
+// been checked, so a typo is reported as one (exit 2) even with no server up.
+// Reports go to stdout, errors to stderr: `--list-sessions --json | jq` must
+// never see a message on its input.
+static int runOperatorCliCommand(
+    quint16 persistedHttpsPort,
+    const std::function<int(const mw::cli::Instance&, QTextStream&, QTextStream&)>& command)
+{
+    QString base;
+    mw::cli::Instance instance;
+    instance.connect = [&] {
+        base = findRunningInstance(persistedHttpsPort);
+        return !base.isEmpty();
+    };
+    instance.get = [&](const QString& path) { return loopbackRequest(base, path); };
+    instance.adminPost = [&](const QString& path, const QByteArray& body) {
+        return loopbackAdminPost(base, path, body);
+    };
+    QTextStream out(stdout);
+    QTextStream err(stderr);
+    const int code = command(instance, out, err);
+    out.flush();
+    err.flush();
+    return code;
 }
 
 // The agreement the operator must accept before the machine is opened to the
@@ -1549,24 +1572,18 @@ int main(int argc, char* argv[])
                                                    "--vhid-apply",
                                                    "--update-apply",
                                                    "--open-on-desktop",
-                                                   "--status",
-                                                   "--new-pin",
-                                                   "--enable-internet",
-                                                   "--set-admin-password",
-                                                   "--clear-admin-password",
-                                                   "--allowed-transports",
                                                    "--help",
                                                    "--help-all",
                                                    "-h",
                                                    "-?",
                                                    "--version",
                                                    "-v"};
-        for (const char* flag : kQuietStdout) {
-            if (qstrcmp(argv[i], flag) == 0) {
-                Logger::instance()->setConsoleToStderr(true);
-                break;
-            }
-        }
+        // The operator commands (--status, --set=…) come from one list,
+        // shared with the log-file decision below.
+        bool quiet = mw::cli::isOperatorCommandArg(argv[i]);
+        for (const char* flag : kQuietStdout)
+            if (qstrcmp(argv[i], flag) == 0) quiet = true;
+        if (quiet) Logger::instance()->setConsoleToStderr(true);
     }
     // Where this process logs is decided HERE, from raw argv, and not after
     // parser.process() — CrashHandler::install() just below writes its first
@@ -1623,10 +1640,8 @@ int main(int argc, char* argv[])
                 // swallow a future --status-something, so require the boundary.
                 // --update-apply too: it opens its own log once the directory
                 // only administrators can write exists (UpdateApply.h).
-                for (const char* flag :
-                     {"--native-bench", "--status", "--new-pin", "--set-admin-password",
-                      "--clear-admin-password", "--enable-internet", "--allowed-transports",
-                      "--update-apply", "--open-on-desktop"}) {
+                if (mw::cli::isOperatorCommandArg(argv[i])) transient = true;
+                for (const char* flag : {"--native-bench", "--update-apply", "--open-on-desktop"}) {
                     const size_t n = qstrlen(flag);
                     if (qstrncmp(argv[i], flag, int(n)) == 0 &&
                         (argv[i][n] == '\0' || argv[i][n] == '='))
@@ -1809,6 +1824,32 @@ int main(int argc, char* argv[])
     QCommandLineOption yesOption("yes", "Accept the --enable-internet agreement, or confirm "
                                         "--clear-admin-password, non-interactively");
     parser.addOption(yesOption);
+
+    QCommandLineOption listSessionsOption(
+        "list-sessions", "List the signed-in browsers (id, device, address, flags), then exit");
+    parser.addOption(listSessionsOption);
+
+    QCommandLineOption revokeSessionOption(
+        "revoke-session",
+        "Sign out one browser by the id --list-sessions shows (a unique prefix will do), "
+        "then exit",
+        "id");
+    parser.addOption(revokeSessionOption);
+
+    QCommandLineOption setOption(
+        "set",
+        "Change a setting of the running server through the admin API, then exit. "
+        "Repeatable; an unknown key lists the supported ones",
+        "key=value");
+    parser.addOption(setOption);
+
+    QCommandLineOption getOption(
+        "get", "Print a setting of the running server (or all of them), then exit. Repeatable",
+        "key");
+    parser.addOption(getOption);
+
+    QCommandLineOption jsonOption("json", "With --list-sessions or --get: print JSON");
+    parser.addOption(jsonOption);
 
     // The native engine's measuring instrument: capture + encode one display
     // for a while into a sink, no network, one CSV row per frame. What the
@@ -2056,6 +2097,34 @@ int main(int argc, char* argv[])
     if (parser.isSet(allowedTransportsOption))
         return runAllowedTransportsCommand(appSettings.httpsPort(mw::edition::defaultHttpsPort()),
                                            parser.value(allowedTransportsOption));
+    if (parser.isSet(listSessionsOption))
+        return runOperatorCliCommand(
+            appSettings.httpsPort(mw::edition::defaultHttpsPort()),
+            [&](const mw::cli::Instance& server, QTextStream& out, QTextStream& err) {
+                return mw::cli::runListSessions(server, parser.isSet(jsonOption),
+                                                QDateTime::currentSecsSinceEpoch(),
+                                                QTimeZone::systemTimeZone(), out, err);
+            });
+    if (parser.isSet(revokeSessionOption))
+        return runOperatorCliCommand(
+            appSettings.httpsPort(mw::edition::defaultHttpsPort()),
+            [&](const mw::cli::Instance& server, QTextStream& out, QTextStream& err) {
+                return mw::cli::runRevokeSession(server, parser.value(revokeSessionOption), out,
+                                                 err);
+            });
+    if (parser.isSet(setOption))
+        return runOperatorCliCommand(
+            appSettings.httpsPort(mw::edition::defaultHttpsPort()),
+            [&](const mw::cli::Instance& server, QTextStream& out, QTextStream& err) {
+                return mw::cli::runSet(server, parser.values(setOption), out, err);
+            });
+    if (parser.isSet(getOption))
+        return runOperatorCliCommand(
+            appSettings.httpsPort(mw::edition::defaultHttpsPort()),
+            [&](const mw::cli::Instance& server, QTextStream& out, QTextStream& err) {
+                return mw::cli::runGet(server, parser.values(getOption), parser.isSet(jsonOption),
+                                       out, err);
+            });
 
     appSettings.seedDocumentedDefaults(); // write documented file-only keys if absent
     // MW_ALLOWED_TRANSPORTS (.env, a unit's Environment=, a container's env):

@@ -325,8 +325,21 @@ docker exec moonlightweb moonlightweb --status               # URLs, PIN, intern
 docker exec moonlightweb moonlightweb --new-pin              # let one more device in
 docker exec -it moonlightweb moonlightweb --set-admin-password
 docker exec -it moonlightweb moonlightweb --enable-internet  # allow the internet link
+docker exec moonlightweb moonlightweb --list-sessions        # who is signed in
+docker exec moonlightweb moonlightweb --revoke-session Ab3dEf_hIj-l   # sign one out
+docker exec moonlightweb moonlightweb --get all              # the settings --set can change
+docker exec moonlightweb moonlightweb --set transport_mode=wss --set cert_auth_enabled=on
 docker logs -f moonlightweb
 ```
+
+`--set` and `--get` go through the running server's admin API, like the admin
+page, so a change applies at once and survives the server's next write to
+`settings.json`. Editing that file in the volume while the container runs does
+not: the server overwrites it. The supported keys are listed in
+[Settings §7.6](../docs/wiki/07-Settings-Reference.md#76-from-a-terminal---get-and---set).
+`--list-sessions --json` and `--get … --json` print JSON for scripts. Every one
+of these commands exits `0` when done, `1` when the server is not running or
+refused, and `2` when the command line is wrong.
 
 The image's `HEALTHCHECK` is `moonlightweb --status`, which answers only once
 the TLS listener is up — so `docker ps` showing *healthy* means a browser can

@@ -294,6 +294,8 @@ docker run -d --name moonlightweb \
 docker exec moonlightweb moonlightweb --new-pin        # required — see below
 docker exec -it moonlightweb moonlightweb --set-admin-password
 docker exec moonlightweb moonlightweb --status         # URLs, PIN, internet state
+docker exec moonlightweb moonlightweb --list-sessions  # who is signed in; --revoke-session <id> signs one out
+docker exec moonlightweb moonlightweb --set transport_mode=wss   # settings, through the running server (--get all lists them)
 ```
 
 Then open **`https://<server-ip>`** and accept the self‑signed certificate.
