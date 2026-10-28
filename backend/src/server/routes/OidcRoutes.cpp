@@ -46,8 +46,10 @@ OidcLogin::Request loginRequest(const HttpRequest& req)
 {
     OidcLogin::Request r;
     r.host = req.headers.value(QStringLiteral("host"));
-    r.clientAddress = req.clientAddress;
-    r.attemptAddress = AuthManager::attemptAddress(req.clientAddress, req.headers);
+    // Bookkeeping only (session IP, logs, lockout): the client a trusted proxy
+    // forwards, as for a PIN login. No privilege reads it.
+    r.clientAddress = req.source();
+    r.attemptAddress = AuthManager::attemptAddress(req);
     // Booth mode lets no new device in, through this door either.
     r.closed = req.viaTunnel || req.adminLocked;
     r.query = req.queryParams;
@@ -128,7 +130,7 @@ void registerOidcRoutes(HttpServer& server, AuthManager& authManager, AppSetting
     // GET /auth/oidc/callback — back from the provider: verify, then a session.
     server.router()->getAsync("/auth/oidc/callback", [&server, login](const HttpRequest& req,
                                                                       ResponseCallback respond) {
-        const QString peer = req.clientAddress;
+        const QString peer = req.source();
         login->callback(loginRequest(req), [&server, peer, respond](const OidcLogin::Reply& reply) {
             if (reply.authFailure) server.reportAuthFailure(peer);
             respond(httpReply(reply));

@@ -48,7 +48,7 @@ public:
     struct Request
     {
         QString host;           ///< the Host header
-        QString clientAddress;  ///< socket peer, stored on the session
+        QString clientAddress;  ///< who signs in (HttpRequest::source()), stored on the session
         QString attemptAddress; ///< AuthManager::attemptAddress, for the rate limit
         /// Through the rendezvous tunnel, or under --noadmin: the door is not
         /// there. A tunnelled page is on the introduction server's origin, where
