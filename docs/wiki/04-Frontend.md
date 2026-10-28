@@ -70,7 +70,7 @@ From the `app.js` header comment — one main view plus overlays:
 
 Auth flow: `LoginView` is shown when the backend answers 401 (PIN entry or certificate-file upload); `BackendClient` force-reloads the page whenever a session expires or is revoked mid-use. On first run (macOS/Linux), `/setup` renders `SetupView` (config → live progress checklist → done).
 
-Pairing: `PairDialog` shows the PIN at once and follows the `stage` the pair routes report ([REST API](08-REST-API.md)): *waiting for the host to show the request* while it is contacted (polled every second), then *enter this PIN*, then *checking the PIN* (polled every 5 s). After a minute with no answer it says it is still waiting and offers **Retry**, which starts a new pairing; a terminal error offers Retry too. A server that reports no `stage` gets the dialog as before.
+Pairing: `PairDialog` shows the PIN at once and follows the `stage` the pair routes report ([REST API](08-REST-API.md)): *waiting for the host to show the request* while it is contacted, then *enter this PIN*, then *checking the PIN* — polled every second, so *Paired* follows the PIN within a second (the check itself is a few LAN round trips, rarely seen); then the button reads **Close** until the dialog closes itself. After a minute with no answer it says it is still waiting and offers **Retry**, which starts a new pairing; a terminal error offers Retry too. A server that reports no `stage` gets the dialog as before.
 
 ## 4.3 StreamView — the streaming overlay
 

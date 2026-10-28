@@ -93,15 +93,18 @@ describe('PairDialog while the host is contacted', () => {
         expect(status().textContent).toBe(t('pairing.enterPin'));
     });
 
-    it('polls every second until the host has it, then every five', async () => {
+    it("polls every second, on the host's turn and on the user's", async () => {
+        // "Paired" then shows within a second of the PIN being typed.
         polls = [waiting('contacting'), waiting('contacting'), waiting('enter_pin')];
         await open();
         await vi.advanceTimersByTimeAsync(3000);
         expect(BackendClient.confirmPairing).toHaveBeenCalledTimes(3);
-        await vi.advanceTimersByTimeAsync(4900);
+        await vi.advanceTimersByTimeAsync(900);
         expect(BackendClient.confirmPairing).toHaveBeenCalledTimes(3);
         await vi.advanceTimersByTimeAsync(100);
         expect(BackendClient.confirmPairing).toHaveBeenCalledTimes(4);
+        await vi.advanceTimersByTimeAsync(1000);
+        expect(BackendClient.confirmPairing).toHaveBeenCalledTimes(5);
     });
 
     it('says the PIN is being checked once it was typed', async () => {
@@ -109,7 +112,7 @@ describe('PairDialog while the host is contacted', () => {
         await open();
         await vi.advanceTimersByTimeAsync(1000);
         expect(status().textContent).toBe(t('pairing.enterPin'));
-        await vi.advanceTimersByTimeAsync(5000);
+        await vi.advanceTimersByTimeAsync(1000);
         expect(status().textContent).toBe(t('pairing.verifying'));
     });
 
@@ -123,8 +126,7 @@ describe('PairDialog while the host is contacted', () => {
         polls = [waiting('enter_pin')];
         await open();
         expect(status().textContent).toBe(t('pairing.enterPin'));
-        // Past the host's turn: the slow cadence from the start.
-        await vi.advanceTimersByTimeAsync(4900);
+        await vi.advanceTimersByTimeAsync(900);
         expect(BackendClient.confirmPairing).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(100);
         expect(BackendClient.confirmPairing).toHaveBeenCalledTimes(1);
@@ -172,7 +174,7 @@ describe('PairDialog after a minute', () => {
         await open();
         await vi.advanceTimersByTimeAsync(60000);
         polls = [waiting('verifying')];
-        await vi.advanceTimersByTimeAsync(5000);
+        await vi.advanceTimersByTimeAsync(1000);
         expect(status().textContent).toBe(t('pairing.verifying'));
         expect(retry().hidden).toBe(true);
     });
@@ -215,12 +217,35 @@ describe('PairDialog endings', () => {
         await open();
         dialog.onComplete = vi.fn();
         await vi.advanceTimersByTimeAsync(1000);
-        await vi.advanceTimersByTimeAsync(5000);
+        await vi.advanceTimersByTimeAsync(1000);
         expect(status().textContent).toBe(t('pairing.paired'));
         expect(status().classList.contains('pairing-success')).toBe(true);
         expect(dialog.onComplete).toHaveBeenCalledTimes(1);
+        // Nothing left to cancel: the button says Close until the dialog goes.
+        const button = document.querySelector('.btn-pair-cancel');
+        expect(button.textContent).toBe(t('common.close'));
+        expect(retry().hidden).toBe(true);
         await vi.advanceTimersByTimeAsync(1500);
         expect(document.querySelector('.pairing-overlay')).toBe(null);
+    });
+
+    it('Close after success closes without cancelling', async () => {
+        polls = [{ status: 'paired' }];
+        await open();
+        dialog.onComplete = vi.fn();
+        dialog.onCancel = vi.fn();
+        await vi.advanceTimersByTimeAsync(1000);
+        document.querySelector('.btn-pair-cancel').click();
+        expect(document.querySelector('.pairing-overlay')).toBe(null);
+        // onComplete already restarted the host list; a cancel would do it twice.
+        expect(dialog.onCancel).not.toHaveBeenCalled();
+        expect(dialog.onComplete).toHaveBeenCalledTimes(1);
+        await vi.advanceTimersByTimeAsync(1500); // the auto-close finds nothing to do
+    });
+
+    it('the button reads Cancel while pairing is still under way', async () => {
+        await open();
+        expect(document.querySelector('.btn-pair-cancel').textContent).toBe(t('common.cancel'));
     });
 
     it('shows a terminal error, stops polling, and offers Retry', async () => {

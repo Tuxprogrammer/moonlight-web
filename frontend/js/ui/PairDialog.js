@@ -23,17 +23,19 @@
  *      host the request it shows to its owner (stage 1)
  *   2. Dialog displays the PIN and polls POST /api/hosts/:id/pair, which says
  *      where it stands (`stage`): waiting for the host to show the request,
- *      the host has it (enter the PIN), the PIN is being checked
+ *      the host has it (enter the PIN), the PIN is being checked (stages 2-5
+ *      take a few LAN round trips, so a poll rarely lands on that one)
  *   3. User enters the PIN in Sunshine → a later poll answers paired
  */
 import { BackendClient } from '../api/BackendClient.js';
 import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
 
-/** Poll this often until the host has the request, so the PIN prompt is prompt. */
-const POLL_WAITING_MS = 1000;
-/** Then this often: the backend restarts a chain that ended on each poll. */
-const POLL_MS = 5000;
+/** Poll this often while the server reports a stage: the polls are answered from
+ *  memory, and "Paired" then shows within a second of the PIN being typed. */
+const POLL_MS = 1000;
+/** A server that reports no stage starts stage 1 on a poll: its old cadence. */
+const POLL_LEGACY_MS = 5000;
 /** Past this with no answer, the dialog says it is still waiting and offers Retry. */
 const STILL_WAITING_MS = 60000;
 
@@ -48,8 +50,9 @@ export class PairDialog {
         this.onCancel = null;
         // Where the pairing stands: 'contacting' | 'enter_pin' | 'verifying'.
         this._stage = null;
-        this._hostContacted = false;
+        this._legacy = false; // the server reports no stage
         this._stillWaiting = false;
+        this._paired = false;
         // Bumped on every (re)start, so a poll from before a Retry is ignored.
         this._attempt = 0;
     }
@@ -121,7 +124,7 @@ export class PairDialog {
     pollPairing() {
         // One poll at a time: the next is scheduled only after the previous answers.
         const attempt = this._attempt;
-        const delay = () => (this._hostContacted ? POLL_MS : POLL_WAITING_MS);
+        const delay = () => (this._legacy ? POLL_LEGACY_MS : POLL_MS);
         const tick = async () => {
             if (!this.overlay || attempt !== this._attempt) return; // closed, or retried
             await this.tryComplete();
@@ -150,8 +153,11 @@ export class PairDialog {
 
             if (result.status === 'paired') {
                 this.stopPolling();
+                this._paired = true;
                 this._setRetryVisible(false);
                 this._setStatus(t('pairing.paired'), 'pairing-success');
+                // Nothing left to cancel for the moment before it closes itself.
+                this.overlay.querySelector('.btn-pair-cancel').textContent = t('common.close');
                 if (this.onComplete) this.onComplete();
                 setTimeout(() => this.close(), 1500);
             } else if (result.status === 'awaiting_pin') {
@@ -172,7 +178,7 @@ export class PairDialog {
     _applyStage(result) {
         const stage = result.stage || 'enter_pin';
         this._stage = stage;
-        this._hostContacted = result.stage ? result.host_contacted !== false : true;
+        this._legacy = !result.stage;
         if (stage === 'verifying') {
             this._stillWaiting = false;
             this._setRetryVisible(false);
@@ -209,7 +215,6 @@ export class PairDialog {
     _retry() {
         this.stopPolling();
         this._stage = null;
-        this._hostContacted = false;
         this._setStatus(t('pairing.contacting'), 'pairing-info');
         this.startPairing();
     }
@@ -252,16 +257,15 @@ export class PairDialog {
             .querySelector('.btn-pair-retry')
             .addEventListener('click', () => this._retry());
 
-        this.overlay.querySelector('.btn-pair-cancel').addEventListener('click', () => {
+        // Once paired, closing is not cancelling: onComplete already ran.
+        const dismiss = () => {
             this.close();
-            if (this.onCancel) this.onCancel();
-        });
+            if (!this._paired && this.onCancel) this.onCancel();
+        };
+        this.overlay.querySelector('.btn-pair-cancel').addEventListener('click', dismiss);
 
         this.overlay.addEventListener('click', (e) => {
-            if (e.target === this.overlay) {
-                this.close();
-                if (this.onCancel) this.onCancel();
-            }
+            if (e.target === this.overlay) dismiss();
         });
     }
 
