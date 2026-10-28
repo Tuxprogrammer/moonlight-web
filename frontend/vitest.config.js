@@ -44,6 +44,7 @@ export default defineConfig({
                 'js/stream/JitterController.js',
                 'js/stream/PeriodicStallDetector.js',
                 'js/stream/PipelineDiag.js',
+                'js/stream/RelaunchBudget.js',
                 'js/stream/EnhancerGovernor.js',
                 'js/stream/RenderPacing.js',
                 'js/stream/DecodeQueuePolicy.js',
