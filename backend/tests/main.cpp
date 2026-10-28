@@ -80,6 +80,7 @@ void run_logger_rotation_tests();
 void run_control_channel_tests();
 void run_feed_ipc_tests();
 void run_cert_manager_tests();
+void run_clipboard_message_tests();
 
 int main(int argc, char** argv)
 {
@@ -148,6 +149,7 @@ int main(int argc, char** argv)
     run_hid_collections_json_tests();
     run_hid_parked_json_tests();
     run_keyboard_layout_tests();
+    run_clipboard_message_tests();
     run_native_capabilities_json_tests();
     run_edition_tests();
     run_mdns_advertiser_tests();

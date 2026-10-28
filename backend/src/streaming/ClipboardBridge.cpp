@@ -80,11 +80,7 @@ void ClipboardBridge::pasteFromClient(IMediaEngine* engine, const QString& text,
     QMetaObject::invokeMethod(
         this,
         [this, shimGuard, text, wrapCtrl]() {
-            const QString t = text.left(kMaxTextChars);
-            if (!t.isEmpty() && t != m_LastText) {
-                m_LastText = t;
-                QGuiApplication::clipboard()->setText(t);
-            }
+            commitText(ClipboardMsg::capText(text));
             // Inject the chord only AFTER the clipboard is committed — same
             // main-thread hop, so ordering is structural. Li input calls are
             // thread-safe (guarded by the shim's connected atomic).
@@ -98,12 +94,44 @@ void ClipboardBridge::pasteFromClient(IMediaEngine* engine, const QString& text,
         Qt::QueuedConnection);
 }
 
+void ClipboardBridge::setFromClient(const QString& text)
+{
+    QMetaObject::invokeMethod(
+        this, [this, text]() { commitText(ClipboardMsg::capText(text)); }, Qt::QueuedConnection);
+}
+
+void ClipboardBridge::handleClientMessage(IMediaEngine* engine, const ClipboardMsg::Request& req,
+                                          const char* logTag)
+{
+    switch (req.action) {
+    case ClipboardMsg::Action::None: return;
+    case ClipboardMsg::Action::Ignore:
+        qDebug() << logTag << "Clipboard message ignored (no host clipboard sync here)";
+        return;
+    case ClipboardMsg::Action::Paste:
+        if (req.truncated) qInfo() << logTag << "Clipboard paste truncated to" << kMaxTextChars;
+        instance()->pasteFromClient(engine, req.text, req.wrapCtrl);
+        return;
+    case ClipboardMsg::Action::Set:
+        if (req.truncated) qInfo() << logTag << "Clipboard set truncated to" << kMaxTextChars;
+        instance()->setFromClient(req.text);
+        return;
+    }
+}
+
+void ClipboardBridge::commitText(const QString& t)
+{
+    if (t.isEmpty() || t == m_LastText) return;
+    m_LastText = t;
+    QGuiApplication::clipboard()->setText(t);
+}
+
 void ClipboardBridge::requestAnnounce()
 {
     QMetaObject::invokeMethod(
         this,
         [this]() {
-            const QString text = QGuiApplication::clipboard()->text().left(kMaxTextChars);
+            const QString text = ClipboardMsg::capText(QGuiApplication::clipboard()->text());
             if (text.isEmpty()) return;
             m_LastText = text;
             emit hostTextChanged(text);
@@ -118,7 +146,7 @@ void ClipboardBridge::onClipboardChanged()
         QMetaMethod::fromSignal(&ClipboardBridge::hostTextChanged);
     if (!isSignalConnected(changedSignal)) return;
 
-    const QString text = QGuiApplication::clipboard()->text().left(kMaxTextChars);
+    const QString text = ClipboardMsg::capText(QGuiApplication::clipboard()->text());
     // Empty = cleared or non-text content (image/files) — text-only bridge.
     // Identical text = echo of our own setText() or a no-op copy.
     if (text.isEmpty() || text == m_LastText) return;

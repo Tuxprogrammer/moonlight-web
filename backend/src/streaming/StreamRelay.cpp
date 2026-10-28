@@ -708,14 +708,12 @@ void StreamRelay::onWsTextMessage(const QString& message)
         // sent once per session on the browser's first real keyboard event.
         m_Shim->syncLockKeys(msg["numLock"].toBool(false), msg["capsLock"].toBool(false),
                              msg["scrollLock"].toBool(false));
-    } else if (type == "clipboardpaste") {
-        // Browser Ctrl/Cmd+V: commit the client text to the host clipboard,
-        // then inject the paste chord (main-thread hop keeps that order).
-        // Only meaningful when the streamed host is this machine.
-        if (m_ClipboardEnabled) {
-            ClipboardBridge::instance()->pasteFromClient(m_Shim, msg["text"].toString(),
-                                                         msg["injectCtrl"].toBool(false));
-        }
+    } else if (ClipboardMsg::isClipboardType(type)) {
+        // 'clipboardpaste' (Ctrl/Cmd+V: commit the text, then inject the
+        // chord, in one main-thread hop) and 'clipboardset' (the clipboard
+        // panel: commit only). Dropped unless the clipboard switch is on.
+        ClipboardBridge::handleClientMessage(
+            m_Shim, ClipboardMsg::decode(type, msg, m_ClipboardEnabled), "[StreamRelay]");
     } else if (type == "unblockinput") {
         // The way out of a closed input gate — native host only, full
         // reasoning in DataChannelRelay's handler.

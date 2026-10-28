@@ -111,6 +111,7 @@ add_executable(run_tests
     test_client_diagnostic.cpp
     test_pairing_chain.cpp
     test_keyboard_layout.cpp
+    test_clipboard_message.cpp
     test_native_capabilities_json.cpp
     test_edition.cpp
     test_mdns_advertiser.cpp
