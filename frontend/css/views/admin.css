@@ -382,3 +382,58 @@
 .admin-logs-status:empty {
     display: none;
 }
+
+/* Clipboard on other hosts: a row per host — its name and the agent's state,
+   the switch, the token's buttons, and the lines to paste once a token is new. */
+.ca-rows {
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+}
+.ca-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: var(--space-3);
+}
+.ca-state {
+    font-size: 0.85em;
+    color: var(--text-2);
+}
+.ca-state-on {
+    color: var(--c-success);
+}
+.ca-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+.ca-issued {
+    margin-top: var(--space-3);
+    padding: var(--space-3);
+    border: 1px solid var(--border-1);
+    border-radius: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-2);
+}
+.ca-code-row {
+    display: flex;
+    align-items: flex-start;
+    gap: var(--space-2);
+}
+.ca-code {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    padding: var(--space-2);
+    font-family: var(--font-mono);
+    font-size: 0.85em;
+    white-space: pre-wrap;
+    word-break: break-all;
+    user-select: all;
+    color: var(--text-1);
+    background: var(--surface-2);
+    border-radius: 6px;
+}

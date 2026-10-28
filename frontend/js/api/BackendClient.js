@@ -291,6 +291,21 @@ export class BackendClient {
     static async restartHost(uuid) {
         return this.post(`/api/hosts/${uuid}/restart`, {}, { timeoutMs: 30000 });
     }
+    /** The host's clipboard agent: switch, token and connection (admin). */
+    static async getClipboardAgent(uuid) {
+        return this.get(`/api/hosts/${uuid}/clipboard-agent`);
+    }
+    static async setClipboardAgentEnabled(uuid, enabled) {
+        return this.post(`/api/hosts/${uuid}/clipboard-agent/enabled`, { enabled: !!enabled });
+    }
+    /** Issue or replace the host's agent token. The answer is the only place
+     *  the token is ever readable; it is not kept anywhere by the page. */
+    static async issueClipboardAgentToken(uuid) {
+        return this.post(`/api/hosts/${uuid}/clipboard-agent/token`);
+    }
+    static async revokeClipboardAgentToken(uuid) {
+        return this.del(`/api/hosts/${uuid}/clipboard-agent/token`);
+    }
     static async startPairing(hostId) {
         return this.post(`/api/hosts/${hostId}/pair/start`);
     }

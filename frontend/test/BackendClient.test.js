@@ -249,6 +249,11 @@ describe('BackendClient', () => {
 /** @type {[string, () => Promise<any>, string][]} */
 const GET_ROUTES = [
     ['getAppList', () => BackendClient.getAppList('h1'), '/api/hosts/h1/apps'],
+    [
+        'getClipboardAgent',
+        () => BackendClient.getClipboardAgent('h1'),
+        '/api/hosts/h1/clipboard-agent',
+    ],
     ['getBackendTypes', () => BackendClient.getBackendTypes(), '/api/backends'],
     ['getHostBackend', () => BackendClient.getHostBackend('h1'), '/api/hosts/h1/backend'],
     ['getHostSeats', () => BackendClient.getHostSeats('h1'), '/api/hosts/h1/seats'],
@@ -285,6 +290,18 @@ const POST_ROUTES = [
         { name: 'Den' },
     ],
     ['restartHost', () => BackendClient.restartHost('u1'), '/api/hosts/u1/restart', {}],
+    [
+        'setClipboardAgentEnabled',
+        () => BackendClient.setClipboardAgentEnabled('u1', 1),
+        '/api/hosts/u1/clipboard-agent/enabled',
+        { enabled: true },
+    ],
+    [
+        'issueClipboardAgentToken',
+        () => BackendClient.issueClipboardAgentToken('u1'),
+        '/api/hosts/u1/clipboard-agent/token',
+        {},
+    ],
     ['startPairing', () => BackendClient.startPairing('h1'), '/api/hosts/h1/pair/start', {}],
     ['confirmPairing', () => BackendClient.confirmPairing('h1'), '/api/hosts/h1/pair', {}],
     [
@@ -425,6 +442,11 @@ const POST_ROUTES = [
 
 /** @type {[string, () => Promise<any>, string][]} */
 const DELETE_ROUTES = [
+    [
+        'revokeClipboardAgentToken',
+        () => BackendClient.revokeClipboardAgentToken('h1'),
+        '/api/hosts/h1/clipboard-agent/token',
+    ],
     ['clearHostBackend', () => BackendClient.clearHostBackend('h1'), '/api/hosts/h1/backend'],
     ['teardownHostSeat', () => BackendClient.teardownHostSeat('h1', 's2'), '/api/hosts/h1/seats/s2'],
     [
