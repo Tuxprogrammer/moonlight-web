@@ -66,6 +66,44 @@ void testDecision()
     CHECK(decide(SlotState::Unknown, other, 5000) == Verdict::NotFound);
 }
 
+void testNormalClose()
+{
+    SECTION("WsProxyConnect: a normal close is not an error");
+    // The page closing its WebSocket: the worker closes its side.
+    CHECK(wsproxy::isNormalClose(QAbstractSocket::RemoteHostClosedError));
+    // Real failures stay warnings.
+    CHECK(!wsproxy::isNormalClose(QAbstractSocket::ConnectionRefusedError));
+    CHECK(!wsproxy::isNormalClose(QAbstractSocket::NetworkError));
+    CHECK(!wsproxy::isNormalClose(QAbstractSocket::SocketTimeoutError));
+    CHECK(!wsproxy::isNormalClose(QAbstractSocket::UnknownSocketError));
+}
+
+void testWorkerCloseIsReportedAsRemoteClose()
+{
+    SECTION("WsProxyConnect: a worker closing the tunnel reads as a normal close");
+    // What the proxy sees when a stream ends: the far end closes an established
+    // connection. Qt reports it as RemoteHostClosedError, which must classify
+    // as normal.
+    QTcpServer worker;
+    CHECK(worker.listen(QHostAddress::LocalHost, 0));
+    QTcpSocket target;
+    QAbstractSocket::SocketError seen = QAbstractSocket::UnknownSocketError;
+    bool errored = false;
+    QObject::connect(&target, &QAbstractSocket::errorOccurred, [&](QAbstractSocket::SocketError e) {
+        seen = e;
+        errored = true;
+    });
+    target.connectToHost(QHostAddress::LocalHost, worker.serverPort());
+    CHECK(waitFor([&] { return worker.hasPendingConnections(); }, 2000));
+    QTcpSocket* accepted = worker.nextPendingConnection();
+    CHECK(waitFor([&] { return target.state() == QAbstractSocket::ConnectedState; }, 2000));
+    accepted->close();
+    CHECK(waitFor([&] { return errored; }, 2000));
+    CHECK(seen == QAbstractSocket::RemoteHostClosedError);
+    CHECK(wsproxy::isNormalClose(seen));
+    delete accepted;
+}
+
 void testResponses()
 {
     SECTION("WsProxyConnect: answers before the upgrade");
@@ -216,6 +254,8 @@ void run_ws_proxy_connect_tests()
 {
     testDecision();
     testResponses();
+    testNormalClose();
+    testWorkerCloseIsReportedAsRemoteClose();
     testLateListener();
     testNeverListens();
     testIdleAndUnknownAnswerAtOnce();
