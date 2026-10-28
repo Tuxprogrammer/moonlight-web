@@ -117,6 +117,19 @@ The consent is the master switch: `internet_access_enabled` gates the per-sessio
 | `debug_mode` | bool | `false` | **Admin → Advanced**. The options of a debug build on any build, and every browser's console sent to `logs/moonlightweb-client.log` ([Backend §3.8](03-Backend.md#38-diagnostics-debug-mode-verbose-logs-the-logs-archive)). `--debug` turns it on for one run without writing here. |
 | `verbose_logs` | bool | `false` | **Admin → Advanced**. The log keeps its DEBUG lines and gains libdatachannel's and Qt's network diagnostics; browsers print their pipeline diagnostics. Applies at once, and to the next stream worker. `--verbose` turns it on for one run without writing here. |
 
+### Clipboard agents
+
+Not in `settings.json`: the per-host switch and token live in **`clipboard-agents.json`**, next to `sessions.json` (the directory of §7.1 minus `--config`), written whole and owner-only. Per host: `enabled` (default `false`), `token_sha256` (the token's hash, never the token), `token_created`, `last_seen`. Managed from the admin page ([REST §8.3](08-REST-API.md#83-hosts--streaming-hostroutescpp--maincpp)); delete a host's entry to forget its agent.
+
+The agent on the host reads, in this order, its arguments, its environment and `~/.config/moonlightweb/clipboard-agent.env` (`%LOCALAPPDATA%\moonlightweb\` on Windows):
+
+| Variable | Argument | Description |
+|---|---|---|
+| `MW_CLIPBOARD_AGENT_SERVER` | `--server` | The server, `https://<address>:<port>`. `http://` only for a loopback server. |
+| `MW_CLIPBOARD_AGENT_PIN` | `--pin` | The server's key pin(s) from the admin page, `sha256/<base64>`, comma-separated. Without one the certificate must verify against the system's CAs. |
+| `MW_CLIPBOARD_AGENT_TOKEN` | `--token-file` | The token, from the environment or a file (default `~/.config/moonlightweb/clipboard-agent.token`). Never an argument. |
+| `MW_CLIPBOARD_AGENT_BACKEND` | `--backend` | `auto` (default), `wl-clipboard`, `klipper`, `qt` or `qt-xwayland`. |
+
 ## 7.3 `.env` — environment configuration
 
 Loaded at startup by `loadEnvFile()` (`.env` next to the executable, else the project root; values quoted or multi-line PEM blocks supported). Reference: `.env.example` at the repo root. All values are optional — without them the server runs LAN-only with a self-signed cert.
