@@ -135,6 +135,7 @@ import { ourStunHost } from './api/IceServers.js';
 import { probeUdp } from './api/UdpProbe.js';
 import { InstanceMenu } from './ui/InstanceMenu.js';
 import { currentInstanceRef, importInstances, rememberInstance } from './util/instances.js';
+import { shouldStartAutomatically, startOidcLogin, wasSignedOut } from './util/oidcLogin.js';
 
 // Every module above arrived and ran: the boot watchdog (bootWatch.js) stands down.
 window.mwBooted = true;
@@ -1544,10 +1545,20 @@ export const MoonlightApp = {
                 // MW-BIND-v1: a session created before this mechanism existed has
                 // no pairing key. Register one now rather than asking the user for
                 // a PIN they already gave. The server only accepts it from
-                // loopback, the LAN or a mesh VPN, and answers 403 otherwise.
+                // loopback, the LAN or a mesh VPN, and answers 403 otherwise —
+                // except in the first minutes of an OpenID Connect login, whose
+                // callback cannot carry the key: this is where that one binds.
                 // Best-effort: never let it hold up the app.
                 BackendClient.ensurePairingKey().catch(() => {});
                 return true;
+            }
+
+            // The identity provider is the only door here (oidc_disable_pin): an
+            // expired session goes straight back to it, silently while its own
+            // session lives. Not after a refusal, nor right after Log out.
+            if (shouldStartAutomatically(status, window.location.search, wasSignedOut())) {
+                startOidcLogin();
+                return false;
             }
 
             // Booth mode (--noadmin) lets no new device in: a PIN would be refused.

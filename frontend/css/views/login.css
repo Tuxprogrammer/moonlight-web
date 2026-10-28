@@ -140,6 +140,18 @@
     margin-top: var(--space-2);
 }
 
+/* "Sign in with …" (OpenID Connect): above the PIN, with a quiet "or" between
+   the two doors; alone when the identity provider is the only one. */
+.login-form--oidc .login-submit {
+    margin-top: 0;
+}
+.login-or {
+    font-size: var(--fs-xs);
+    color: var(--text-3);
+    text-align: center;
+    margin: var(--space-4) 0;
+}
+
 .login-error {
     color: var(--c-danger-text);
     font-size: var(--fs-sm);

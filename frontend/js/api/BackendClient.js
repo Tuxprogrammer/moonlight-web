@@ -684,8 +684,10 @@ export class BackendClient {
      * mechanism existed, and collect the host's own identity.
      *
      * Trust-on-first-use over the already-authenticated session cookie. The
-     * server only accepts it from loopback, the LAN or a mesh VPN; from the
-     * internet it answers 403 and the visitor pairs with a PIN instead. Silent
+     * server only accepts it from loopback, the LAN or a mesh VPN — or from
+     * anywhere in the first minutes of an OpenID Connect login, which has no
+     * login body to carry the key; otherwise it answers 403 and the visitor
+     * pairs with a PIN instead. Silent
      * and best-effort by design: a browser that cannot bind still streams, it
      * simply does so without the fingerprint binding.
      */
@@ -892,6 +894,20 @@ export class BackendClient {
     }
     static async saveAdminSettings(settings) {
         return this.post('/api/admin/settings', settings);
+    }
+
+    // ── OpenID Connect (Admin → Sign-in with an identity provider) ─────────────
+
+    static async getOidcSettings() {
+        return this.get('/api/admin/oidc');
+    }
+    /** All or nothing; the client secret only when typed (write-only). */
+    static async saveOidcSettings(settings) {
+        return this.post('/api/admin/oidc', settings);
+    }
+    /** Discovery + key set of @p issuer (the saved one when empty), uncached. */
+    static async testOidcDiscovery(issuer) {
+        return this.post('/api/admin/oidc/test', issuer ? { issuer } : {});
     }
 
     // ── Logs archive (Admin → Advanced) ─────────────────────────────────────────

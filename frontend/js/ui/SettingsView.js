@@ -100,6 +100,7 @@ import {
     pyrowaveBlocker,
 } from '../util/PyrowaveCodec.js';
 import { CODEC_AUTO, codecAfterAutoMigration } from '../util/CodecAuto.js';
+import { markSignedOut } from '../util/oidcLogin.js';
 
 const STORAGE_KEY = 'mw-streaming-settings';
 
@@ -211,6 +212,7 @@ export class SettingsView {
         // _checkSession(). False for the host machine's own browser, whichever
         // address it reached us under.
         this._canLogout = false;
+        this._oidcSession = false;
 
         // Debounce timer to avoid rapid repeated saves
         this._saveTimer = null;
@@ -531,6 +533,8 @@ export class SettingsView {
     async _checkSession() {
         try {
             const status = await BackendClient.getAuthStatus();
+            // An OpenID Connect session logs out here only: say so (see _logout).
+            this._oidcSession = status.auth_method === 'oidc';
             return status.has_session === true && status.is_host_machine !== true;
         } catch (err) {
             console.warn('[Settings] Could not read the auth status:', err);
@@ -2084,7 +2088,7 @@ export class SettingsView {
                     <button class="btn btn-danger" id="btn-settings-logout">
                         ${t('settings.logout')}
                     </button>
-                    <span class="setting-desc">${t('settings.logoutDesc')}</span>
+                    <span class="setting-desc">${this._oidcSession ? t('settings.logoutDescOidc') : t('settings.logoutDesc')}</span>
                 </div>`
                         : ''
                 }
@@ -2389,6 +2393,10 @@ export class SettingsView {
         if (!(await confirmAction(t('settings.logoutConfirm')))) return;
 
         btn.disabled = true;
+        // Where the identity provider is the only door, the next page would
+        // otherwise go straight back to it and be signed in again by its
+        // still-open session: the logout would undo itself.
+        markSignedOut();
         try {
             await BackendClient.logout();
         } catch (err) {

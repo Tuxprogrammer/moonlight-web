@@ -226,4 +226,33 @@ describe('SettingsView log out', () => {
         await view._logout(container.querySelector('#btn-settings-logout'));
         expect(replace).toHaveBeenCalledWith('/');
     });
+    it('is offered to an OpenID Connect session, saying the provider stays signed in', async () => {
+        const v = new SettingsView(document.body, () => {});
+        BackendClient.getAuthStatus.mockResolvedValueOnce({
+            has_session: true,
+            is_host_machine: false,
+            auth_method: 'oidc',
+        });
+        expect(await v._checkSession()).toBe(true);
+        expect(v._oidcSession).toBe(true);
+        build(true);
+        view._oidcSession = true;
+        view.render();
+        expect(container.textContent).toContain('settings.logoutDescOidc');
+        view._oidcSession = false;
+        view.render();
+        expect(container.textContent).not.toContain('settings.logoutDescOidc');
+    });
+
+    it('keeps the next page from signing straight back in through the provider', async () => {
+        sessionStorage.clear();
+        build(true);
+        vi.stubGlobal(
+            'confirm',
+            vi.fn(() => true),
+        );
+        await view._logout(container.querySelector('#btn-settings-logout'));
+        expect(sessionStorage.getItem('mw-oidc-signed-out')).toBe('1');
+        sessionStorage.clear();
+    });
 });
