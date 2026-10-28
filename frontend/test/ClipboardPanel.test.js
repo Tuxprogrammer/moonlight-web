@@ -9,9 +9,9 @@ import {
     MAX_SET_CHARS,
     MAX_TYPE_CHARS,
     SETTINGS_KEY,
-    TYPE_CHUNK_BYTES,
     TYPE_INTERVAL_MS,
     TextTyper,
+    capCodePoints,
     capText,
     readClipboardPrefs,
     typingSteps,
@@ -130,36 +130,56 @@ describe('capText', () => {
 });
 
 describe('typingSteps', () => {
-    it('cuts ASCII into chunks of the protocol text packet', () => {
-        const steps = typingSteps('a'.repeat(70));
-        expect(steps.map((s) => s.text.length)).toEqual([32, 32, 6]);
-        expect(steps.every((s) => s.chars === s.text.length)).toBe(true);
-        expect(TYPE_CHUNK_BYTES).toBe(32);
+    it('sends one code point per message: Sunshine on Linux mangles more', () => {
+        const steps = typingSteps('a #$%&*()[');
+        expect(steps.map((x) => x.text)).toEqual([
+            'a',
+            ' ',
+            '#',
+            '$',
+            '%',
+            '&',
+            '*',
+            '(',
+            ')',
+            '[',
+        ]);
+        expect(steps.every((x) => x.chars === 1)).toBe(true);
     });
 
-    it('counts UTF-8 bytes and never splits a character', () => {
-        // é = 2 bytes, 中 = 3, 😀 = 4.
-        const steps = typingSteps('é'.repeat(17), 32);
-        expect(steps[0].text).toBe('é'.repeat(16));
-        expect(steps[1].text).toBe('é');
-        const cjk = typingSteps('中'.repeat(11), 32);
-        expect(cjk.map((s) => s.text.length)).toEqual([10, 1]);
-        const emoji = typingSteps('\u{1F600}'.repeat(9), 32);
-        expect(emoji[0].text).toBe('\u{1F600}'.repeat(8));
-        expect(emoji[0].chars).toBe(8);
-        expect(emoji[1].text).toBe('\u{1F600}');
+    it('keeps accented and CJK characters whole', () => {
+        expect(typingSteps('é ü ß 日本').map((x) => x.text)).toEqual([
+            'é',
+            ' ',
+            'ü',
+            ' ',
+            'ß',
+            ' ',
+            '日',
+            '本',
+        ]);
+    });
+
+    it('never splits a surrogate pair: an emoji is one message', () => {
+        const steps = typingSteps('a\u{1F600}b\u{1F44D}');
+        expect(steps.map((x) => x.text)).toEqual(['a', '\u{1F600}', 'b', '\u{1F44D}']);
+        expect(steps[1].text).toHaveLength(2);
+        for (const x of steps) {
+            const last = x.text.charCodeAt(x.text.length - 1);
+            expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+        }
     });
 
     it('types each line break as Enter, whatever its spelling', () => {
-        const steps = typingSteps('one\r\ntwo\rthree\nfour');
+        const steps = typingSteps('a\r\nb\rc\nd');
         expect(steps).toEqual([
-            { text: 'one', chars: 3 },
+            { text: 'a', chars: 1 },
             { enter: true, chars: 1 },
-            { text: 'two', chars: 3 },
+            { text: 'b', chars: 1 },
             { enter: true, chars: 1 },
-            { text: 'three', chars: 5 },
+            { text: 'c', chars: 1 },
             { enter: true, chars: 1 },
-            { text: 'four', chars: 4 },
+            { text: 'd', chars: 1 },
         ]);
         expect(typingSteps('\n\n')).toEqual([
             { enter: true, chars: 1 },
@@ -169,6 +189,25 @@ describe('typingSteps', () => {
 
     it('has nothing to type for an empty text', () => {
         expect(typingSteps('')).toEqual([]);
+    });
+
+    it('the E2E test string: one step per character, 66 of them', () => {
+        const test =
+            'Hello, World! 123 #$%&*()[]{};:\'"<>/?\\|`~_+=-\nLine2: é ü ß 日本 \u{1F600} end';
+        const steps = typingSteps(test);
+        expect(steps).toHaveLength(Array.from(test).length);
+        expect(steps.filter((x) => x.enter)).toHaveLength(1);
+        expect(steps.map((x) => (x.enter ? '\n' : x.text)).join('')).toBe(test);
+    });
+});
+
+describe('capCodePoints', () => {
+    it('counts an emoji as one character', () => {
+        expect(capCodePoints('ab\u{1F600}cd', 3)).toBe('ab\u{1F600}');
+        expect(capCodePoints('ab\u{1F600}cd', 2)).toBe('ab');
+        expect(capCodePoints('abc', 5)).toBe('abc');
+        expect(capCodePoints('abc', 0)).toBe('');
+        expect(capCodePoints('abc', -1)).toBe('');
     });
 });
 
@@ -304,21 +343,25 @@ describe('TextTyper', () => {
     beforeEach(() => vi.useFakeTimers());
     afterEach(() => vi.useRealTimers());
 
-    it('sends the first step at once, then one per interval', () => {
+    it('paces one character every TYPE_INTERVAL_MS, the first at once', () => {
+        expect(TYPE_INTERVAL_MS).toBe(30);
         const sent = [];
         const progress = [];
         const onDone = vi.fn();
         const typer = new TextTyper({
             send: (m) => sent.push(m),
-            steps: typingSteps('a'.repeat(40) + '\nb'),
+            steps: typingSteps('ab\nc'),
             onProgress: (d, total) => progress.push([d, total]),
             onDone,
         });
         typer.start();
         expect(typer.active).toBe(true);
-        expect(sent).toEqual([{ type: 'textinput', text: 'a'.repeat(32) }]);
-        vi.advanceTimersByTime(TYPE_INTERVAL_MS);
-        expect(sent[1]).toEqual({ type: 'textinput', text: 'a'.repeat(8) });
+        expect(sent).toEqual([{ type: 'textinput', text: 'a' }]);
+        // Nothing early: one tick short of the interval sends nothing more.
+        vi.advanceTimersByTime(TYPE_INTERVAL_MS - 1);
+        expect(sent).toHaveLength(1);
+        vi.advanceTimersByTime(1);
+        expect(sent[1]).toEqual({ type: 'textinput', text: 'b' });
         vi.advanceTimersByTime(TYPE_INTERVAL_MS);
         // The line break: Enter pressed and let go, no modifier.
         expect(sent[2]).toMatchObject({ type: 'keydown', keyCode: 0x0d, code: 'Enter' });
@@ -328,26 +371,53 @@ describe('TextTyper', () => {
         );
         expect(onDone).not.toHaveBeenCalled();
         vi.advanceTimersByTime(TYPE_INTERVAL_MS);
-        expect(sent[4]).toEqual({ type: 'textinput', text: 'b' });
+        expect(sent[4]).toEqual({ type: 'textinput', text: 'c' });
         expect(onDone).toHaveBeenCalledWith(false);
         expect(typer.active).toBe(false);
-        expect(progress.at(-1)).toEqual([42, 42]);
-        expect(typer.total).toBe(42);
+        expect(progress).toEqual([
+            [1, 4],
+            [2, 4],
+            [3, 4],
+            [4, 4],
+        ]);
+        expect(typer.total).toBe(4);
     });
 
-    it('stops on cancel, says so once, and sends nothing more', () => {
+    it('takes N - 1 intervals for N characters', () => {
         const sent = [];
         const onDone = vi.fn();
         const typer = new TextTyper({
             send: (m) => sent.push(m),
-            steps: typingSteps('x'.repeat(200)),
+            steps: typingSteps('x'.repeat(100)),
             onDone,
         });
         typer.start();
+        vi.advanceTimersByTime(TYPE_INTERVAL_MS * 98);
+        expect(sent).toHaveLength(99);
+        expect(onDone).not.toHaveBeenCalled();
+        vi.advanceTimersByTime(TYPE_INTERVAL_MS);
+        expect(sent).toHaveLength(100);
+        expect(onDone).toHaveBeenCalledWith(false);
+    });
+
+    it('cancelled mid-way, stops on that character exactly and says so once', () => {
+        const sent = [];
+        const progress = [];
+        const onDone = vi.fn();
+        const typer = new TextTyper({
+            send: (m) => sent.push(m),
+            steps: typingSteps('x'.repeat(200)),
+            onProgress: (d) => progress.push(d),
+            onDone,
+        });
+        typer.start();
+        vi.advanceTimersByTime(TYPE_INTERVAL_MS * 9);
+        expect(sent).toHaveLength(10);
         typer.cancel();
         typer.cancel();
-        vi.advanceTimersByTime(TYPE_INTERVAL_MS * 20);
-        expect(sent).toHaveLength(1);
+        vi.advanceTimersByTime(TYPE_INTERVAL_MS * 50);
+        expect(sent).toHaveLength(10);
+        expect(progress.at(-1)).toBe(10);
         expect(onDone).toHaveBeenCalledTimes(1);
         expect(onDone).toHaveBeenCalledWith(true);
     });
@@ -356,7 +426,7 @@ describe('TextTyper', () => {
         const timers = { setTimeout: vi.fn(() => 7), clearTimeout: vi.fn() };
         const typer = new TextTyper({
             send: () => {},
-            steps: typingSteps('y'.repeat(64)),
+            steps: typingSteps('yy'),
             intervalMs: 5,
             timers,
         });
@@ -755,16 +825,23 @@ describe('ClipboardPanel', () => {
     describe('Type on host', () => {
         beforeEach(() => vi.useFakeTimers());
 
-        it('types the box in paced chunks, with progress, through textinput', () => {
+        it('types the box one character per message, with exact progress', () => {
             const p = make();
             p.open();
-            type('b'.repeat(40) + '\n!');
+            type('b\u{1F600}\n!');
             $('[data-act="send"]').click();
             expect(p.typing).toBe(true);
-            expect(sent).toEqual([{ type: 'textinput', text: 'b'.repeat(32) }]);
+            expect(sent).toEqual([{ type: 'textinput', text: 'b' }]);
             const progress = $('.clipboard-panel-progress');
+            const bar = progress.querySelector('progress');
             expect(progress.hidden).toBe(false);
-            expect(progress.querySelector('progress').value).toBe(32);
+            expect([bar.value, bar.max]).toEqual([1, 4]);
+            vi.advanceTimersByTime(TYPE_INTERVAL_MS);
+            expect(sent[1]).toEqual({ type: 'textinput', text: '\u{1F600}' });
+            expect(bar.value).toBe(2);
+            expect(progress.querySelector('.clipboard-panel-progress-text').textContent).toBe(
+                'clipboard.typingProgress',
+            );
             vi.advanceTimersByTime(TYPE_INTERVAL_MS * 10);
             expect(sent.map((m) => m.type)).toEqual([
                 'textinput',
@@ -784,32 +861,44 @@ describe('ClipboardPanel', () => {
             p.open();
             type('one');
             p.send();
+            vi.advanceTimersByTime(TYPE_INTERVAL_MS * 5);
             expect($('.clipboard-panel-note').textContent).toBe('clipboard.typed');
             type('two '.repeat(20));
             p.send();
             expect($('.clipboard-panel-note').textContent).toBe('');
         });
 
-        it('Cancel stops it', () => {
+        it('Cancel mid-way stops on the character it reached', () => {
             const p = make();
             p.open();
             type('c'.repeat(500));
             p.send();
+            vi.advanceTimersByTime(TYPE_INTERVAL_MS * 19);
+            expect(sent).toHaveLength(20);
             $('[data-act="cancel"]').click();
             vi.advanceTimersByTime(TYPE_INTERVAL_MS * 50);
-            expect(sent).toHaveLength(1);
+            expect(sent).toHaveLength(20);
+            expect($('.clipboard-panel-progress').hidden).toBe(true);
             expect($('.clipboard-panel-note').textContent).toBe('clipboard.typingCancelled');
         });
 
-        it('types at most MAX_TYPE_CHARS, and says so', () => {
+        it('types at most MAX_TYPE_CHARS characters, and says so', () => {
             const p = make();
             p.open();
             type('d'.repeat(MAX_TYPE_CHARS + 100));
             p.send();
-            vi.advanceTimersByTime(TYPE_INTERVAL_MS * (MAX_TYPE_CHARS / 32 + 5));
-            const typed = sent.map((m) => m.text).join('');
-            expect(typed).toHaveLength(MAX_TYPE_CHARS);
+            vi.advanceTimersByTime(TYPE_INTERVAL_MS * (MAX_TYPE_CHARS + 5));
+            expect(sent).toHaveLength(MAX_TYPE_CHARS);
+            expect(sent.map((m) => m.text).join('')).toHaveLength(MAX_TYPE_CHARS);
             expect($('.clipboard-panel-note').textContent).toBe('clipboard.typedTruncated');
+        });
+
+        it('the cap counts an emoji as one character', () => {
+            const p = make();
+            p.typeText('\u{1F600}'.repeat(MAX_TYPE_CHARS + 1));
+            vi.advanceTimersByTime(TYPE_INTERVAL_MS * (MAX_TYPE_CHARS + 5));
+            expect(sent).toHaveLength(MAX_TYPE_CHARS);
+            expect(sent.every((m) => m.text === '\u{1F600}')).toBe(true);
         });
 
         it('a second text replaces the first', () => {
@@ -817,7 +906,7 @@ describe('ClipboardPanel', () => {
             p.typeText('e'.repeat(100));
             p.typeText('f');
             vi.advanceTimersByTime(TYPE_INTERVAL_MS * 10);
-            expect(sent.map((m) => m.text)).toEqual(['e'.repeat(32), 'f']);
+            expect(sent.map((m) => m.text)).toEqual(['e', 'f']);
         });
 
         it('has nothing to type for an empty text', () => {
@@ -826,11 +915,11 @@ describe('ClipboardPanel', () => {
             expect(sent).toEqual([]);
         });
 
-        it('from Ctrl+V, long text shows a toast whose button cancels', () => {
+        it('from Ctrl+V, more than a second of typing shows a toast whose button cancels', () => {
             const p = make();
             const dismiss = vi.fn();
             state.toast.info.mockReturnValue({ dismiss });
-            p.typeText('g'.repeat(32 * 6), { fromPaste: true });
+            p.typeText('g'.repeat(Math.ceil(1000 / TYPE_INTERVAL_MS) + 1), { fromPaste: true });
             expect(state.toast.info).toHaveBeenCalledTimes(1);
             const [, opts] = state.toast.info.mock.calls[0];
             expect(opts.sticky).toBe(true);
@@ -841,10 +930,10 @@ describe('ClipboardPanel', () => {
 
         it('from Ctrl+V, short text needs no toast; the panel stays shut', () => {
             const p = make();
-            p.typeText('short', { fromPaste: true });
+            p.typeText('g'.repeat(Math.ceil(1000 / TYPE_INTERVAL_MS)), { fromPaste: true });
             expect(state.toast.info).not.toHaveBeenCalled();
             expect(p.isOpen).toBe(false);
-            expect(sent).toEqual([{ type: 'textinput', text: 'short' }]);
+            expect(sent).toEqual([{ type: 'textinput', text: 'g' }]);
         });
 
         it('once typed, the text is no edit to protect: the host clipboard replaces it', () => {
@@ -852,7 +941,7 @@ describe('ClipboardPanel', () => {
             p.open();
             type('typed out');
             p.send();
-            vi.advanceTimersByTime(TYPE_INTERVAL_MS * 5);
+            vi.advanceTimersByTime(TYPE_INTERVAL_MS * 10);
             p.setSyncAvailable(true);
             p.hostText('host copy');
             expect(area().value).toBe('host copy');
@@ -872,8 +961,9 @@ describe('ClipboardPanel', () => {
             const p = make();
             const dismiss = vi.fn();
             state.toast.info.mockReturnValue({ dismiss });
-            p.typeText('h'.repeat(32 * 6), { fromPaste: true });
-            vi.advanceTimersByTime(TYPE_INTERVAL_MS * 10);
+            const n = Math.ceil(1000 / TYPE_INTERVAL_MS) + 5;
+            p.typeText('h'.repeat(n), { fromPaste: true });
+            vi.advanceTimersByTime(TYPE_INTERVAL_MS * n);
             expect(dismiss).toHaveBeenCalledTimes(1);
         });
     });
