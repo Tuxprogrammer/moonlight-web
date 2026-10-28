@@ -102,6 +102,8 @@ From the in‑app overlay: **bitrate** (1–150 Mbps or auto), **resolution** (7
 
 **Settings → Start streams in fullscreen** (off by default) opens every stream in fullscreen. On an iPhone, Safari keeps its bars and the stream fills the page; added to the Home Screen, MoonlightWeb is fullscreen anyway.
 
+**Clipboard panel**: press **Ctrl+Alt+Shift** on their own (Cmd+Option+Ctrl on a Mac), **Ctrl+Alt+Shift+C**, the clipboard button in the stream's bar, or **Clipboard** in a TV remote's menu. While it is open your keyboard stays in the panel. When the host is the server's own machine its clipboard is shared: the box follows it, **Send** replaces it, and **Copy to this device** brings it over. Any other host (GameStream has no clipboard channel) gets **Type on host**: the text is typed where the host's cursor is, up to 10,000 characters, with a progress bar and Cancel. Two settings, off by default and per browser: **Sync my clipboard to the host when the stream gets focus** (shared clipboard only; the browser asks first) and **Ctrl+V types my clipboard** (for the other hosts). Nothing is installed on the device you watch from. A guest sees no host clipboard, and types only with keyboard access.
+
 <div align="center">
 
 | Video settings | Advanced options |

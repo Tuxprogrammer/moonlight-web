@@ -94,6 +94,7 @@ import {
 } from '../util/BrowserDetect.js';
 import * as RemoteNav from './RemoteNav.js';
 import { StreamRemoteMenu } from './StreamRemoteMenu.js';
+import { ClipboardPanel, ChordGesture } from './ClipboardPanel.js';
 import { RemotePointer } from '../stream/RemotePointer.js';
 import {
     createVideoRenderer,
@@ -1657,6 +1658,12 @@ export class StreamView {
         // locally (Safari requires a gesture for clipboard.writeText,
         // Firefox a <5s-old one; Chrome writes immediately).
         this._pendingClipboardWrite = null;
+        // The clipboard panel (ui/ClipboardPanel.js), built with the header;
+        // the bare Ctrl+Alt+Shift that opens it is watched by _clipboardChord.
+        this._clipboardPanel = null;
+        this._clipboardBtn = null;
+        this._clipboardChord = new ChordGesture(/Mac/.test(navigator.platform));
+        this._clipboardPanelClosedAt = 0;
 
         // Bound handlers
         this._onKeyDown = (e) => this.handleKeyDown(e);
@@ -1673,7 +1680,11 @@ export class StreamView {
         // Regaining window focus (Alt-Tab back from another app) may leave the
         // pointer over the streamed picture without a mousemove — re-apply the
         // cursor hide so the local arrow doesn't double the host cursor.
-        this._onWindowFocus = () => this._refreshLocalCursorOnFocus();
+        this._onWindowFocus = () => {
+            this._refreshLocalCursorOnFocus();
+            // The setting "sync my clipboard when the stream gets focus".
+            if (this._clipboardPanel) this._clipboardPanel.onStreamFocus();
+        };
         this._onMouseMove = (e) => this.handleMouseMove(e);
         this._onMouseDown = (e) => this.handleMouseDown(e);
         this._onMouseUp = (e) => this.handleMouseUp(e);
@@ -1822,6 +1833,7 @@ export class StreamView {
             if (document.visibilityState === 'hidden') this._releaseAllPhysKeys();
             if (document.visibilityState === 'visible' && !this._quitting) {
                 this._resyncAfterHidden();
+                if (this._clipboardPanel) this._clipboardPanel.onStreamFocus();
                 // Coming back to the tab may leave the pointer over the picture
                 // without a mousemove — re-hide the local cursor (double cursor).
                 this._refreshLocalCursorOnFocus();
@@ -2547,6 +2559,7 @@ export class StreamView {
             header.insertBefore(this._mobileFsBtn, header.firstChild);
         }
         this._buildVolumeControl(header);
+        this._buildClipboardPanel(header);
         // Initial state: desktop = visible, mobile = landscape only
         this._updateMobileFsButtonVisibility();
 
@@ -4324,6 +4337,7 @@ export class StreamView {
         const consoleBtn = this._rootEl.querySelector('#btn-stream-console');
         if (consoleBtn) consoleBtn.classList.remove('stream-ctl-prestart');
         if (this._kbdBtn) this._kbdBtn.classList.remove('stream-ctl-prestart');
+        if (this._clipboardBtn) this._clipboardBtn.classList.remove('stream-ctl-prestart');
         this._mountGamepadButton();
         this._mountShareMenu();
         this._mountSupportButton();
@@ -7730,6 +7744,7 @@ export class StreamView {
             // machine). Until this arrives, Ctrl+V is forwarded as a plain
             // keystroke like before.
             this._clipboardEnabled = !!msg.available;
+            if (this._clipboardPanel) this._clipboardPanel.setSyncAvailable(this._clipboardEnabled);
             console.log(
                 '[StreamView] Host clipboard sync ' +
                     (this._clipboardEnabled ? 'enabled' : 'disabled'),
@@ -7737,7 +7752,10 @@ export class StreamView {
             return;
         }
         if (msg.type === 'clipboard') {
-            if (typeof msg.text === 'string') this._applyHostClipboard(msg.text);
+            if (typeof msg.text === 'string') {
+                this._applyHostClipboard(msg.text);
+                if (this._clipboardPanel) this._clipboardPanel.hostText(msg.text);
+            }
             return;
         }
         if (msg.type === 'inputstamp') {
@@ -9718,6 +9736,8 @@ export class StreamView {
         this._mouseAllowed = allowed;
         console.log(`[StreamView] Mouse ${allowed ? 'given to' : 'taken from'} this viewer`);
         if (this._kbdBtn) this._kbdBtn.hidden = !allowed;
+        if (this._clipboardBtn) this._clipboardBtn.hidden = !allowed;
+        if (this._clipboardPanel) this._clipboardPanel.refresh();
         if (allowed) return;
         this._hideVirtualKeyboard();
         if (document.pointerLockElement === this.inputEl) document.exitPointerLock();
@@ -9847,7 +9867,8 @@ export class StreamView {
         if (!el || typeof el.closest !== 'function') return false;
         return !!el.closest(
             'input, textarea, select, [contenteditable="true"], ' +
-                '.share-popin-overlay, .share-board-overlay, .gamepad-remap-overlay',
+                '.share-popin-overlay, .share-board-overlay, .gamepad-remap-overlay, ' +
+                '.clipboard-panel',
         );
     }
 
@@ -10296,6 +10317,17 @@ export class StreamView {
             e.preventDefault();
             return;
         }
+        // The clipboard panel is open: the keyboard is its own, even when the
+        // focus slipped out of it (a click on the picture). Escape closes it.
+        if (this._clipboardPanel && this._clipboardPanel.isOpen) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                this._clipboardPanel.close();
+            } else {
+                this._clipboardPanel.focus();
+            }
+            return;
+        }
         // A key the host has no code for — a remote's colour or app keys
         // (no code, keyCode 0), an IME's 229 — has nothing to press there.
         if (!e.code && (!e.keyCode || e.keyCode === 229)) {
@@ -10305,6 +10337,9 @@ export class StreamView {
         if (RemoteNav.isActive() && this._remoteOkDown(e)) return;
         if (this._remotePointerOn && this._remotePointerActive() && this._remotePointerKeyDown(e))
             return;
+
+        // Ctrl+Alt+Shift pressed alone opens the clipboard panel on release.
+        if (this._clipboardChord) this._clipboardChord.keyDown(e);
 
         // Before anything else reads this event: a modifier the local OS ate
         // the key-up of is still down on the host, and this event says so.
@@ -10381,8 +10416,12 @@ export class StreamView {
         // turned one paste into an endless one. Ctrl+V on a Mac is a plain
         // keystroke again: the host pastes its own clipboard, immediately.
         const pasteChord = this._appleKeyboard ? e.metaKey && !e.ctrlKey : e.ctrlKey;
+        // No shared clipboard, but the setting "Ctrl+V types my clipboard":
+        // the same native paste event, typed on the host instead.
+        const pasteTypes =
+            !this._clipboardEnabled && !!this._clipboardPanel && this._clipboardPanel.ctrlVTypes();
         if (
-            this._clipboardEnabled &&
+            (this._clipboardEnabled || pasteTypes) &&
             pasteChord &&
             !e.altKey &&
             !e.shiftKey &&
@@ -10404,6 +10443,7 @@ export class StreamView {
                 // Cmd-based paste (Mac): the host sees Cmd as the Win key, so
                 // the backend must wrap the injected V with its own Ctrl.
                 injectCtrl: e.metaKey && !e.ctrlKey,
+                typing: pasteTypes,
                 timer: setTimeout(() => this._sendPendingPasteKey(), 150),
             };
             return;
@@ -10495,6 +10535,14 @@ export class StreamView {
                         durationMs: 1500,
                     });
                 }
+                return;
+            }
+
+            // Clipboard panel open / closed: Ctrl+Alt+Shift+C (Win) /
+            // Cmd+Option+Ctrl+C (Mac) — the bare three do the same.
+            if (chk('c', 'KeyC')) {
+                e.preventDefault();
+                if (!e.repeat) this._toggleClipboardPanel();
                 return;
             }
 
@@ -10789,6 +10837,10 @@ export class StreamView {
             e.preventDefault();
             return;
         }
+        // The bare Ctrl+Alt+Shift: the panel opens once this release is through.
+        if (this._clipboardChord && this._clipboardChord.keyUp(e)) {
+            queueMicrotask(() => this._toggleClipboardPanel());
+        }
         // The menu takes its keys down and up; and the release of the OK that
         // picked one of its buttons comes after the menu is gone — its press
         // never went to the host, so neither does it. Same once Stop was
@@ -10797,7 +10849,12 @@ export class StreamView {
         const held = this._heldPhysKeys.has(e.code) || this._heldPhysKeys.has(e.keyCode);
         if (
             (this._remoteMenu && this._remoteMenu.isOpen) ||
+            (this._clipboardPanel && this._clipboardPanel.isOpen) ||
             (!held && performance.now() - this._remoteMenuClosedAt < 1000) ||
+            // Same for the keys that closed the clipboard panel (Escape, C).
+            (!held &&
+                this._clipboardPanelClosedAt > 0 &&
+                performance.now() - this._clipboardPanelClosedAt < 1000) ||
             (!held && this._manualQuitting)
         ) {
             e.preventDefault();
@@ -10891,6 +10948,8 @@ export class StreamView {
             this._composedKey = null;
         }
         this._deadPending = false;
+        // A chord half-pressed when the focus went is not a gesture any more.
+        if (this._clipboardChord) this._clipboardChord.reset();
         // Nothing stays held, so no late keyup is worth swallowing any more.
         if (this._metaTapCodes) this._metaTapCodes.clear();
         if (this._swallowKeyUpCodes) this._swallowKeyUpCodes.clear();
@@ -11586,6 +11645,14 @@ export class StreamView {
         }
         clearTimeout(pending.timer);
         this._pendingPasteKey = null;
+        if (pending.typing) {
+            // Ctrl (or Cmd) is down on the host: typed under it, every letter
+            // would be a shortcut. Let go of it, and of the V's release.
+            this._releaseHeldModifiers();
+            this._suppressPasteKeyUpCode = pending.code;
+            if (this._clipboardPanel) this._clipboardPanel.typeText(text, { fromPaste: true });
+            return;
+        }
         // Cmd is still down, and the host knows it as the Windows key: the
         // chord the backend is about to inject would land as Win+Ctrl+V, which
         // pastes nothing on Windows. Let go of it first.
@@ -11638,6 +11705,14 @@ export class StreamView {
         if (!pending) return;
         clearTimeout(pending.timer);
         this._pendingPasteKey = null;
+        if (pending.typing && pending.injectCtrl) {
+            // No shared clipboard to replay a chord through: Cmd+V goes as the
+            // tap it would have been without the setting (see the meta-tap branch).
+            this._sendKeyEvent({ ...pending.keydownMsg, type: 'keydown' });
+            this._sendKeyEvent({ ...pending.keydownMsg, type: 'keyup' });
+            if (this._metaTapCodes) this._metaTapCodes.add(pending.code);
+            return;
+        }
         if (pending.injectCtrl) {
             this._releaseHeldMeta();
             this._suppressPasteKeyUpCode = pending.code;
@@ -12588,6 +12663,10 @@ export class StreamView {
                 statsOn: () => !!(this._showPerfStats && !this._statsClosed),
                 onResume: () => this._closeRemoteMenu(),
                 onStats: () => this._toggleStatsFromMenu(),
+                onClipboard: () => {
+                    this._closeRemoteMenu();
+                    this._toggleClipboardPanel();
+                },
                 pointerOn: () => this._remotePointerOn,
                 onPointer: () => this._toggleRemotePointer(),
                 onStop: () => {
@@ -12609,6 +12688,65 @@ export class StreamView {
         this._remoteMenu.close();
         this._remoteMenuClosedAt = performance.now();
         this._releasePads('remote-menu');
+    }
+
+    /**
+     * The clipboard panel and its header button. The button is for touch and
+     * the mouse; a keyboard has the combos, a TV remote the menu's entry. A
+     * guest invited to watch has no keyboard on the host: no button.
+     */
+    _buildClipboardPanel(header) {
+        const isMac = /Mac/.test(navigator.platform);
+        this._clipboardPanel = new ClipboardPanel({
+            container: this._rootEl || document.body,
+            send: (msg) => {
+                if (this.webrtc) this.webrtc.send(msg);
+            },
+            isMac,
+            canType: () => this._mouseAllowed,
+            isGuest: () => this._playerMode,
+            onOpen: () => this._onClipboardPanelOpen(),
+            onClose: () => this._onClipboardPanelClose(),
+            toast: Toast,
+        });
+        if (this._clipboardEnabled) this._clipboardPanel.setSyncAvailable(true);
+        const btn = document.createElement('button');
+        btn.id = 'btn-stream-clipboard';
+        btn.type = 'button';
+        btn.className = 'btn-stream-clip stream-ctl-prestart';
+        btn.innerHTML = Icons.clipboard;
+        const combo = isMac ? 'Ctrl+Option+Cmd+C' : 'Ctrl+Alt+Shift+C';
+        btn.title = t('clipboard.open', { combo });
+        btn.setAttribute('aria-label', t('clipboard.title'));
+        btn.hidden = !this._mouseAllowed;
+        btn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._toggleClipboardPanel();
+        });
+        // Beside Stop, with the other controls on the right of the bar.
+        if (header) header.insertBefore(btn, header.querySelector('#btn-stream-quit'));
+        this._clipboardBtn = btn;
+    }
+
+    _toggleClipboardPanel() {
+        if (!this._clipboardPanel || this._quitting || this._manualQuitting) return;
+        this._clipboardPanel.toggle();
+    }
+
+    /** The panel takes the keyboard: whatever the host holds is let go first. */
+    _onClipboardPanelOpen() {
+        this._releaseAllPhysKeys();
+        if (this._remotePointer) this._remotePointer.releaseAll();
+        // Free the pointer, so the panel's buttons can be reached.
+        if (document.pointerLockElement) document.exitPointerLock();
+        if (this._kbdVisible) this._hideVirtualKeyboard();
+        if (this._clipboardBtn) this._clipboardBtn.classList.add('active');
+    }
+
+    _onClipboardPanelClose() {
+        this._clipboardPanelClosedAt = performance.now();
+        if (this._clipboardBtn) this._clipboardBtn.classList.remove('active');
+        if (this._keyField) this._focusKeyField();
     }
 
     /** The menu's Statistics: the stats card on, or off as its × would. */
@@ -12923,6 +13061,14 @@ export class StreamView {
         if (this._padBtn) {
             this._padBtn.remove();
             this._padBtn = null;
+        }
+        if (this._clipboardPanel) {
+            this._clipboardPanel.destroy();
+            this._clipboardPanel = null;
+        }
+        if (this._clipboardBtn) {
+            this._clipboardBtn.remove();
+            this._clipboardBtn = null;
         }
         if (this._gamepadDialog) {
             this._gamepadDialog.close();
@@ -13314,6 +13460,14 @@ export class StreamView {
         if (this._padBtn) {
             this._padBtn.remove();
             this._padBtn = null;
+        }
+        if (this._clipboardPanel) {
+            this._clipboardPanel.destroy();
+            this._clipboardPanel = null;
+        }
+        if (this._clipboardBtn) {
+            this._clipboardBtn.remove();
+            this._clipboardBtn = null;
         }
         if (this._gamepadDialog) {
             this._gamepadDialog.close();
