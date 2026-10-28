@@ -288,6 +288,7 @@ add_executable(mw-server
     src/server/ControlTunnel.cpp
     src/server/HttpParser.cpp
     src/server/RequestGuard.cpp
+    src/server/OperatorCli.cpp
     src/server/CertManager.cpp
     src/server/StaticFileHandler.cpp
     src/server/HomeScreenShell.cpp

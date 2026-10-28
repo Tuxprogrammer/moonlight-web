@@ -78,6 +78,7 @@ void run_logger_rotation_tests();
 void run_control_channel_tests();
 void run_feed_ipc_tests();
 void run_cert_manager_tests();
+void run_operator_cli_tests();
 
 int main(int argc, char** argv)
 {
@@ -151,6 +152,7 @@ int main(int argc, char** argv)
     run_control_channel_tests();
     run_feed_ipc_tests();
     run_cert_manager_tests();
+    run_operator_cli_tests();
     // Last: it repoints the Logger singleton at its own temp files.
     run_logger_rotation_tests();
 
