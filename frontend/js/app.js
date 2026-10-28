@@ -82,6 +82,8 @@ import {
     SCM_AV1_MAIN10,
     chroma444ClientCapability,
     chroma444Codec,
+    hevcDecodeTrusted,
+    noteHevcDecodeRefused,
 } from './util/BrowserDetect.js';
 import { CODEC_AUTO, migrateStoredCodecToAuto } from './util/CodecAuto.js';
 import {
@@ -112,6 +114,13 @@ import {
     settledStreamState,
     shouldRelaunchAfterCrash,
 } from './stream/CrashRelaunch.js';
+import {
+    CODEC_RELAUNCH_MAX,
+    chargeRelaunch,
+    freshRelaunchBudget,
+    mayRelaunch,
+    settleRelaunchBudget,
+} from './stream/RelaunchBudget.js';
 import * as iosAudioUnlock from './audio/iosAudioUnlock.js';
 import { init as i18nInit, applyDOM, t } from './i18n/i18n.js';
 import { escapeHtml } from './util/escapeHtml.js';
@@ -212,6 +221,19 @@ function selfStreamWarnMuted() {
     }
 }
 
+/**
+ * Whether @p view ended because this browser failed to decode HEVC SDR: the
+ * codec fallback to H.264 a decoder asks for, not one for HDR or 4:4:4 (each
+ * probed on its own), a silent decoder or the shared feed changing codec.
+ * @param {any} view the StreamView that ended
+ * @param {{codec: string, reason?: string}|null|undefined} target its fallback
+ */
+export function decodeFailedOnHevc(view, target) {
+    if (!view || !target || target.codec !== 'h264' || target.reason) return false;
+    const codec = String(view.videoCodec || '').toLowerCase();
+    return (codec === 'hevc' || codec === 'auto') && !view._hdrEnabled && !view._yuv444;
+}
+
 export const MoonlightApp = {
     // ── View instances persisted across overlays ─────────────────────────────
     state: 'loading',
@@ -225,11 +247,11 @@ export const MoonlightApp = {
     // shell, not to what is currently drawn inside it.
     instanceMenu: null,
 
-    // ── HEVC fallback guard ─────────────────────────────────────────────────
-    // Counts consecutive HEVC→H.264 fallback attempts to prevent infinite
-    // re-launch loops. Reset to 0 each time the user initiates a new stream
-    // (not a fallback). If H.264 also fails, stop falling back.
-    _fallbackAttemptCount: 0,
+    // ── Relaunch guard ──────────────────────────────────────────────────────
+    // Every automatic relaunch of the current launch — codec fallbacks on
+    // their own, and all kinds together (stream/RelaunchBudget.js) — so that
+    // no mix of failures relaunches for good. Reset by the user's own launch.
+    _relaunchBudget: null,
 
     // performance.now() when the owner's current stream was launched; 0 when
     // none is running (see _noteSupportSession).
@@ -602,6 +624,9 @@ export const MoonlightApp = {
                         streamView._codecFallback?.codec === 'h264'
                     ) {
                         console.warn('[MW] Guest: codec fallback → H.264');
+                        // Its next join asks H.264 at once (PlayerJoinView).
+                        if (decodeFailedOnHevc(streamView, streamView._codecFallback))
+                            noteHevcDecodeRefused();
                         // The guest loses 4:4:4 there as the owner does, and is
                         // told the same way.
                         if (streamView._yuv444) Toast.warning(t('launch.chroma444Fallback'));
@@ -1977,7 +2002,7 @@ export const MoonlightApp = {
 
         // Reset fallback counter on user-initiated launch (not a fallback re-launch)
         if (!codecOverride) {
-            this._fallbackAttemptCount = 0;
+            this._relaunchBudget = freshRelaunchBudget();
             // Reset transport-chain fallback state for a fresh launch.
             this._transportIndex = 0;
             this._firstTransportRetried = false;
@@ -2022,6 +2047,8 @@ export const MoonlightApp = {
             // No WebRTC in this browser: /start is told (capabilities), and the
             // chain skips every webrtc-* rung whatever the backend sends.
             this._webrtcUnavailable = !webrtcAvailable();
+        } else {
+            this._restartChainForCodec();
         }
 
         // Store host/app for HEVC fallback re-launch
@@ -2203,6 +2230,9 @@ export const MoonlightApp = {
                 streamingSettings.video_codec = codec;
             }
         }
+
+        // HEVC only from a browser that decodes it (_trustHevc).
+        await this._trustHevc(streamingSettings, codecOverride);
 
         // Mobile: request lower-bandwidth audio (10ms Opus frames, half the
         // packet rate) to ease transmission on constrained networks. Negligible
@@ -3581,6 +3611,66 @@ export const MoonlightApp = {
         });
     },
 
+    /**
+     * HEVC (asked by Auto, or chosen) only from a browser that decodes it:
+     * the probe guests already got (hevcClientDecodes), and this browser's
+     * own record of failing anyway (hevcDecodeRefused) — Firefox says yes to
+     * isConfigSupported and then decodes nothing. Otherwise H.264 at once,
+     * rather than a stream that fails its first picture and comes back.
+     * HDR and 4:4:4 keep their own decode probes; a fallback relaunch (its
+     * codec forced) and a PyroWave launch are left as they are.
+     */
+    async _trustHevc(settings, codecOverride) {
+        if (codecOverride || settings.video_codec !== 'hevc') return;
+        if (settings.hdr_enabled || settings.chroma_444_enabled || settings.ultra_codec) return;
+        if (await hevcDecodeTrusted()) return;
+        console.log('[MW] HEVC: this browser does not decode it — asking H.264');
+        settings.video_codec = 'h264';
+    },
+
+    /**
+     * A codec relaunch starts the transport chain over (the backend builds it
+     * for the new codec): its first rung gets its silent retry again, and the
+     * host its launch retry. The relaunch budget (_takeRelaunch) bounds the
+     * whole, so this cannot turn into a loop.
+     */
+    _restartChainForCodec() {
+        this._firstTransportRetried = false;
+        this._launchRetried = false;
+    },
+
+    /**
+     * Spend one automatic relaunch of @p kind (stream/RelaunchBudget.js).
+     * @p sv is the view it replaces: one that had shown pictures for a minute
+     * proved the launch, and the budget starts over.
+     * @returns {boolean} false when the budget is spent: relaunch nothing.
+     */
+    _takeRelaunch(kind, sv) {
+        const firstFrameAt = sv && sv._firstFrameAt;
+        const budget = settleRelaunchBudget(this._relaunchBudget, firstFrameAt, performance.now());
+        if (!mayRelaunch(budget, kind)) {
+            this._relaunchBudget = budget;
+            console.error(
+                `[MW] No ${kind} relaunch left (${budget.total} automatic relaunches, ` +
+                    `${budget.codec} codec) — stopping`,
+            );
+            return false;
+        }
+        this._relaunchBudget = chargeRelaunch(budget, kind);
+        return true;
+    },
+
+    /**
+     * _takeRelaunch for the transport chain: when the budget is spent, the
+     * launch ends here, and says it kept failing.
+     */
+    _spendChainRelaunch(kind) {
+        if (this._takeRelaunch(kind, this.streamView)) return true;
+        Toast.error(t('launch.relaunchLimit'));
+        this._endAfterFailedLaunch();
+        return false;
+    },
+
     /** Human-readable label for a transport mode (warning toasts / logs). */
     _transportLabel(mode) {
         const keys = {
@@ -3615,6 +3705,10 @@ export const MoonlightApp = {
         if (this._relaunching || !shouldRelaunchAfterCrash(state, this._crashRelaunches, now)) {
             if (state === 'crashed')
                 console.warn('[MW] The stream worker crashed again — ending the stream');
+            sv._linkLostDefault();
+            return;
+        }
+        if (!this._takeRelaunch('crash', sv)) {
             sv._linkLostDefault();
             return;
         }
@@ -3741,6 +3835,7 @@ export const MoonlightApp = {
                 // so a genuinely wedged host still costs seconds, not minutes.
                 const nextRung = this._nextRung(chain, cur + 1);
                 if (!exhausted && this._firstTransportRetried && nextRung < chain.length) {
+                    if (!this._spendChainRelaunch('launch')) return;
                     console.warn(
                         `[MW] Launch failed on ${chain[cur]} after a transport failure —` +
                             ` moving to ${chain[nextRung]} rather than ending here`,
@@ -3767,6 +3862,7 @@ export const MoonlightApp = {
                 this._endAfterFailedLaunch();
                 return;
             }
+            if (!this._spendChainRelaunch('launch')) return;
             this._launchRetried = true;
             console.warn(
                 `[MW] Launch failed on ${chain[cur] || '?'} — retrying the same transport`,
@@ -3811,6 +3907,7 @@ export const MoonlightApp = {
         const iceTimedOut = /ice timeout/i.test(String(reason)) || reason === 'connect_timeout';
         if (cur === 0 && (iceTimedOut || noWebrtc)) this._firstTransportRetried = true;
         if (cur === 0 && !this._firstTransportRetried && !decoderFail && !iceTimedOut) {
+            if (!this._spendChainRelaunch('transport')) return;
             this._firstTransportRetried = true;
             console.warn(`[MW] Transport ${chain[0]} failed (${reason}) — retrying once (silent)`);
             this._relaunchTransport(0);
@@ -3823,6 +3920,7 @@ export const MoonlightApp = {
         // is a WebRTC one too, so none is left without WebRTC.
         const next = this._nextRung(chain, cur + 1, decoderFail);
         if (next < chain.length) {
+            if (!this._spendChainRelaunch('transport')) return;
             console.warn(`[MW] Transport ${chain[cur]} failed (${reason}) — trying ${chain[next]}`);
             Toast.warning(
                 noWebrtc
@@ -4777,6 +4875,7 @@ export const MoonlightApp = {
         }
 
         // Capture fallback state BEFORE nulling streamView
+        const endedView = this.streamView;
         const fallbackRequested = this.streamView && this.streamView._codecFallbackRequested;
         const fallbackTarget = this.streamView && this.streamView._codecFallback;
         const fallbackHost = this._lastStreamHost;
@@ -4791,10 +4890,20 @@ export const MoonlightApp = {
         // target. Chain: HEVC HDR → AV1 HDR → HEVC SDR → H.264 SDR. Re-launch
         // with the next step (loader stays up so Apps is never revealed).
         if (fallbackRequested && fallbackTarget && fallbackHost && fallbackApp) {
-            this._fallbackAttemptCount++;
-            // The chain has at most 3 hops; allow up to 4 attempts as a safety net.
-            if (this._fallbackAttemptCount > 4) {
-                console.error('[MW] Codec fallback chain exhausted, giving up');
+            // This browser could not decode the HEVC it said it decodes: the
+            // next launches ask H.264 at once (_trustHevc).
+            if (decodeFailedOnHevc(endedView, fallbackTarget)) noteHevcDecodeRefused();
+            // At most CODEC_RELAUNCH_MAX codec relaunches, and every automatic
+            // relaunch of this launch counted together (_takeRelaunch): a codec
+            // relaunch starts the transport chain over, so neither count alone
+            // bounded the two taking turns.
+            if (!this._takeRelaunch('codec', endedView)) {
+                const codecSpent = (this._relaunchBudget?.codec || 0) >= CODEC_RELAUNCH_MAX;
+                console.error(
+                    codecSpent
+                        ? '[MW] Codec fallback chain exhausted, giving up'
+                        : '[MW] Too many relaunches for this launch, giving up',
+                );
                 iosAudioUnlock.release(); // giving up — drop the iOS session hold
                 this._hideRelaunchLoader();
                 this.transition('host_list');
@@ -4804,21 +4913,22 @@ export const MoonlightApp = {
                     this._renderMainView();
                     history.replaceState({ view: 'hosts' }, '', '/');
                 }
-                Toast.error(t('launch.hevcH264Unsupported'));
+                Toast.error(t(codecSpent ? 'launch.hevcH264Unsupported' : 'launch.relaunchLimit'));
                 return;
             }
+            const attempt = this._relaunchBudget.codec;
 
             // The same codec again, on keyframes (StreamView._checkSilentDecoder):
             // nothing the viewer asked for is lost, so nothing to tell them.
             const sameCodecAgain = fallbackTarget.reason === 'silent-decoder';
             console.warn(
                 sameCodecAgain
-                    ? `[MW] Relaunch on keyframes: the decoder went silent (attempt ${this._fallbackAttemptCount})`
+                    ? `[MW] Relaunch on keyframes: the decoder went silent (attempt ${attempt})`
                     : (fallbackTarget.reason === 'opaque-hdr-frames'
                           ? '[MW] Relaunch without the HDR readback (opaque frames)'
                           : '[MW] Codec fallback') +
                           ` → ${fallbackTarget.codec}` +
-                          `${fallbackTarget.hdr ? ' HDR' : ' SDR'} (attempt ${this._fallbackAttemptCount})`,
+                          `${fallbackTarget.hdr ? ' HDR' : ' SDR'} (attempt ${attempt})`,
             );
 
             // When the fallback drops HDR, persist the unchecked preference so the
@@ -4859,8 +4969,8 @@ export const MoonlightApp = {
             return;
         }
 
-        // Reset fallback counter on successful non-fallback quit
-        this._fallbackAttemptCount = 0;
+        // The stream is over: the next launch is the user's, with its own budget.
+        this._relaunchBudget = null;
 
         // Real streaming exit — release the iOS playback-session hold.
         iosAudioUnlock.release();

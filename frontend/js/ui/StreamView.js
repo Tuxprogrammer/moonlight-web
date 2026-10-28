@@ -80,6 +80,7 @@ import {
     SUPPORTS_CANVAS_TEARING,
     decoderRidesOutGaps,
     decodesThroughGaps,
+    forgetHevcDecodeRefused,
     hdrExtTonemapRoute,
     hdrFramesOpaque,
     mwsrGazeWanted,
@@ -3604,7 +3605,8 @@ export class StreamView {
         const cur = (this.videoCodec === 'auto' ? 'hevc' : this.videoCodec).toLowerCase();
         if (cur === 'h264') return;
         console.warn('[StreamView] The shared feed goes H.264 — rejoining in it');
-        this._codecFallback = { codec: 'h264', hdr: false };
+        // Not this browser's failure: no HEVC verdict is kept for it.
+        this._codecFallback = { codec: 'h264', hdr: false, reason: 'shared-feed' };
         this._codecFallbackRequested = true;
         this.quit();
     }
@@ -4185,6 +4187,13 @@ export class StreamView {
     _markFirstFrame() {
         const first = !this._firstFrameRendered;
         this._firstFrameRendered = true;
+        if (first) {
+            // When this view proved itself, for the relaunch budget (app.js).
+            this._firstFrameAt = performance.now();
+            // HEVC decoded through WebCodecs after all: an old verdict goes.
+            const codec = String(this.videoCodec || '').toLowerCase();
+            if (codec === 'hevc' && this._transport !== 'webrtc-media') forgetHevcDecodeRefused();
+        }
         // Whatever this view was showing in place of a picture is now stale.
         this._clearStalePoster();
         this.setStatus('live', 'Live');

@@ -949,7 +949,8 @@
         "hevcH264Unsupported": "浏览器同时不支持 HEVC 和 H.264",
         "hdrFallback": "HDR 不可用——已切换到不含 HDR 的 {{to}}",
         "chroma444Fallback": "不支持 4:4:4 — 已切换为 H.264 4:2:0",
-        "tvOverAsk": "这台电视可能跟不上 {{height}}p {{fps}} fps——自动模式会选择 {{autoHeight}}p {{autoFps}} fps。"
+        "tvOverAsk": "这台电视可能跟不上 {{height}}p {{fps}} fps——自动模式会选择 {{autoHeight}}p {{autoFps}} fps。",
+        "relaunchLimit": "串流多次启动失败——已在数次自动重试后停止。请重试，或在设置中选择其他编解码器。"
     },
     "permission": {
         "videoCapture": {

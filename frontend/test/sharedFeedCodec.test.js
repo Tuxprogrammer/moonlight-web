@@ -33,7 +33,8 @@ describe('StreamView — the shared feed changing codec', () => {
         const v = guest();
         handle(v, { type: 'feedcodec', codec: 'h264' });
         expect(v._codecFallbackRequested).toBe(true);
-        expect(v._codecFallback).toEqual({ codec: 'h264', hdr: false });
+        // Named, so the app keeps no "HEVC fails here" verdict for it.
+        expect(v._codecFallback).toEqual({ codec: 'h264', hdr: false, reason: 'shared-feed' });
         expect(v.quit).toHaveBeenCalledOnce();
     });
 
