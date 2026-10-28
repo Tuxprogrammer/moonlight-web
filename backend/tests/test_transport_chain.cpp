@@ -307,11 +307,145 @@ void testCapabilitiesParsing()
     CHECK(webrtcCapable(parse(R"({"webrtc":false})")));
 }
 
-// Every combination: modes × body modes × the five booleans.
+void testPolicy()
+{
+    SECTION("TransportChain: the admin's allowed transports");
+    using transportchain::build;
+
+    // "all" (the default) changes nothing.
+    Inputs in = make(QStringLiteral("auto"));
+    CHECK_EQ(in.policy, QStringLiteral("all"));
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT, WSS}));
+
+    // WebSocket only: WebRTC really is off, whatever the mode asked for.
+    in.policy = QStringLiteral("wss");
+    Chain c = build(in);
+    CHECK_EQ(c.rungs, (QStringList{WSS}));
+    CHECK(c.emptyReason == EmptyReason::None);
+    in.adminMode = MU; // a saved WebRTC mode is clamped away
+    c = build(in);
+    CHECK_EQ(c.rungs, (QStringList{WSS}));
+    CHECK_EQ(c.mode, QStringLiteral("auto"));
+    in.bodyMode = DCU; // so is one the request names (power saving, degrade)
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+    in.dropUdp = true;
+    c = build(in);
+    CHECK_EQ(c.rungs, (QStringList{WSS}));
+    CHECK(!c.udpDropped);
+    in.webrtcAvailable = false; // a browser without WebRTC is served
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+    // Through the rendezvous nothing is left, and the rendezvous is why.
+    in = make(QStringLiteral("auto"));
+    in.policy = QStringLiteral("wss");
+    in.viaTunnel = true;
+    c = build(in);
+    CHECK(c.rungs.isEmpty());
+    CHECK(c.emptyReason == EmptyReason::Tunnel);
+    in.webrtcAvailable = false;
+    CHECK(build(in).emptyReason == EmptyReason::Tunnel);
+
+    // WebRTC only: no wss, even named, even on the LAN.
+    in = make(QStringLiteral("auto"));
+    in.policy = QStringLiteral("webrtc");
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT}));
+    in.videoEnhancement = true;
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT}));
+    in.adminMode = WSS;
+    c = build(in);
+    CHECK_EQ(c.mode, QStringLiteral("auto"));
+    CHECK_EQ(c.rungs, (QStringList{DCU, DCT, MU, MT}));
+    CHECK(c.dropped.isEmpty()); // clamped by the policy, not lost to the rendezvous
+    // A request mode outside the policy falls back to the admin's.
+    in.adminMode = MU;
+    in.bodyMode = WSS;
+    c = build(in);
+    CHECK_EQ(c.mode, MU);
+    CHECK_EQ(c.rungs, (QStringList{MU, MT, DCU, DCT}));
+    // A request mode inside it still wins.
+    in.bodyMode = DCT;
+    CHECK_EQ(build(in).rungs.first(), DCT);
+    // A browser without WebRTC: nothing, and the browser is why.
+    in = make(QStringLiteral("auto"));
+    in.policy = QStringLiteral("webrtc");
+    in.webrtcAvailable = false;
+    c = build(in);
+    CHECK(c.rungs.isEmpty());
+    CHECK(c.emptyReason == EmptyReason::WebrtcUnavailable);
+    in.viaTunnel = true;
+    CHECK(build(in).emptyReason == EmptyReason::WebrtcUnavailable);
+
+    // A value that is no policy reads as "all".
+    in = make(QStringLiteral("auto"));
+    in.policy = QStringLiteral("udp");
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT, WSS}));
+    in.policy = QStringLiteral(" WSS ");
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+}
+
+void testPreference()
+{
+    SECTION("TransportChain: the browser's transport_pref");
+    using transportchain::build;
+
+    Inputs in = make(QStringLiteral("auto"));
+    CHECK_EQ(in.pref, QStringLiteral("auto"));
+    in.pref = QStringLiteral("wss");
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+    in.pref = QStringLiteral("webrtc");
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT}));
+    in.pref = QStringLiteral("auto");
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT, WSS}));
+    in.pref = QStringLiteral("nonsense"); // reads as auto
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT, WSS}));
+
+    // The preference filters what the mode ordered.
+    in = make(WSS);
+    in.pref = QStringLiteral("webrtc");
+    Chain c = build(in);
+    CHECK_EQ(c.mode, QStringLiteral("auto")); // wss is outside the preference
+    CHECK_EQ(c.rungs, (QStringList{DCU, DCT, MU, MT}));
+    in = make(QStringLiteral("auto"), MU); // power saving's forced MediaTrack
+    in.pref = QStringLiteral("webrtc");
+    CHECK_EQ(build(in).rungs, (QStringList{MU, MT, DCU, DCT}));
+    in.pref = QStringLiteral("wss");
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+
+    // Inside the policy only: a preference the admin forbids leaves nothing.
+    in = make(QStringLiteral("auto"));
+    in.policy = QStringLiteral("webrtc");
+    in.pref = QStringLiteral("wss");
+    c = build(in);
+    CHECK(c.rungs.isEmpty());
+    CHECK(c.emptyReason == EmptyReason::Policy);
+    in.policy = QStringLiteral("wss");
+    in.pref = QStringLiteral("webrtc");
+    CHECK(build(in).emptyReason == EmptyReason::Policy);
+    in.pref = QStringLiteral("wss");
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+
+    // WebSocket preferred through the rendezvous: the rendezvous is why.
+    in = make(QStringLiteral("auto"));
+    in.pref = QStringLiteral("wss");
+    in.viaTunnel = true;
+    CHECK(build(in).emptyReason == EmptyReason::Tunnel);
+    // WebRTC preferred by a browser without it: the browser is why.
+    in = make(QStringLiteral("auto"));
+    in.pref = QStringLiteral("webrtc");
+    in.webrtcAvailable = false;
+    CHECK(build(in).emptyReason == EmptyReason::WebrtcUnavailable);
+    // Blocked UDP with WebRTC preferred: the TCP rungs.
+    in.webrtcAvailable = true;
+    in.dropUdp = true;
+    CHECK_EQ(build(in).rungs, (QStringList{DCT, MT}));
+}
+
+// Every combination: modes × body modes × policy × preference × the five
+// booleans, against a model of the rules written family by family.
 void testInvariants()
 {
     SECTION("TransportChain: invariants over every combination");
     using transportchain::build;
+    using transportpolicy::familyAllows;
     const QStringList modes{QString(),
                             QStringLiteral("auto"),
                             QStringLiteral("all"),
@@ -321,64 +455,91 @@ void testInvariants()
                             MU,
                             MT,
                             WSS};
-    auto known = [](const QString& m) {
-        return m == QStringLiteral("auto") || m == QStringLiteral("all") ||
-               transportchain::isRung(m);
-    };
+    const QStringList policies{QStringLiteral("all"), QStringLiteral("webrtc"),
+                               QStringLiteral("wss")};
+    const QStringList prefs{QStringLiteral("auto"), QStringLiteral("webrtc"),
+                            QStringLiteral("wss")};
     int combos = 0;
-    for (const QString& admin : modes)
-        for (const QString& body : modes)
-            for (int bits = 0; bits < 32; ++bits) {
-                Inputs in = make(admin, body);
-                in.viaTunnel = bits & 1;
-                in.dropUdp = bits & 2;
-                in.videoEnhancement = bits & 4;
-                in.mediaTrackAllowed = bits & 8;
-                in.webrtcAvailable = !(bits & 16);
-                const Chain c = build(in);
-                ++combos;
+    for (const QString& policy : policies)
+        for (const QString& pref : prefs)
+            for (const QString& admin : modes)
+                for (const QString& body : modes)
+                    for (int bits = 0; bits < 32; ++bits) {
+                        Inputs in = make(admin, body);
+                        in.policy = policy;
+                        in.pref = pref;
+                        in.viaTunnel = bits & 1;
+                        in.dropUdp = bits & 2;
+                        in.videoEnhancement = bits & 4;
+                        in.mediaTrackAllowed = bits & 8;
+                        in.webrtcAvailable = !(bits & 16);
+                        const Chain c = build(in);
+                        ++combos;
 
-                // Empty only for a browser without WebRTC through the
-                // rendezvous, and then it says why.
-                const bool expectEmpty = !in.webrtcAvailable && in.viaTunnel;
-                CHECK_EQ(c.rungs.isEmpty(), expectEmpty);
-                CHECK(c.emptyReason ==
-                      (expectEmpty ? EmptyReason::WebrtcUnavailable : EmptyReason::None));
-                // Never a duplicate, never anything but a known rung.
-                CHECK_EQ(QSet<QString>(c.rungs.begin(), c.rungs.end()).size(),
-                         static_cast<int>(c.rungs.size()));
-                for (const QString& r : c.rungs)
-                    CHECK(transportchain::isRung(r));
-                // No wss through the rendezvous.
-                if (in.viaTunnel) CHECK(!c.rungs.contains(WSS));
-                // No WebRTC rung for a browser without it.
-                if (!in.webrtcAvailable) CHECK(c.rungs.isEmpty() || c.rungs == QStringList{WSS});
-                // Blocked UDP leaves no UDP rung (a TCP one always remains).
-                for (const QString& r : c.rungs)
-                    if (in.dropUdp) CHECK(!r.endsWith(QStringLiteral("-udp")));
-                CHECK_EQ(c.udpDropped, in.dropUdp && in.webrtcAvailable);
-                // The effective mode: a known body mode over a known admin
-                // mode; "all", empty and unknown read as auto.
-                QString expected = QStringLiteral("auto");
-                if (known(admin)) expected = admin;
-                if (known(body)) expected = body;
-                if (expected == QStringLiteral("all")) expected = QStringLiteral("auto");
-                CHECK_EQ(c.mode, expected);
-                // A forced mode that can run here leads the chain.
-                const bool forcedRuns =
-                    expected != QStringLiteral("auto") && !(in.viaTunnel && expected == WSS) &&
-                    !(in.dropUdp && expected.endsWith(QStringLiteral("-udp"))) &&
-                    !(!in.webrtcAvailable && expected != WSS);
-                if (forcedRuns) CHECK_EQ(c.rungs.first(), expected);
-                CHECK_EQ(c.dropped.isEmpty(), !(in.viaTunnel && expected == WSS));
-                // MediaTrack only as the forced mode when the codec is not H.264.
-                if (!in.mediaTrackAllowed)
-                    for (const QString& r : c.rungs)
-                        if (r.startsWith(QStringLiteral("webrtc-media"))) CHECK_EQ(r, expected);
-                // DataChannel TCP is there whenever WebRTC is: it works anywhere.
-                if (in.webrtcAvailable) CHECK(c.rungs.contains(DCT));
-            }
-    CHECK_EQ(combos, 9 * 9 * 32);
+                        // A rung runs when every filter lets its family through.
+                        auto runs = [&](const QString& r) {
+                            return familyAllows(policy, r) && familyAllows(pref, r) &&
+                                   !(in.viaTunnel && r == WSS) &&
+                                   !(!in.webrtcAvailable && r != WSS);
+                        };
+                        for (const QString& r : c.rungs) {
+                            CHECK(transportchain::isRung(r));
+                            CHECK(runs(r));
+                            if (in.dropUdp) CHECK(!r.endsWith(QStringLiteral("-udp")));
+                        }
+                        CHECK_EQ(QSet<QString>(c.rungs.begin(), c.rungs.end()).size(),
+                                 static_cast<int>(c.rungs.size()));
+
+                        // Empty exactly when neither family runs (DataChannel TCP
+                        // and wss are in every order), and then the first filter
+                        // that took the last family is why: policy, rendezvous,
+                        // browser.
+                        const bool webrtcRuns = runs(DCT);
+                        const bool wssRuns = runs(WSS);
+                        CHECK_EQ(c.rungs.isEmpty(), !webrtcRuns && !wssRuns);
+                        if (webrtcRuns) CHECK(c.rungs.contains(DCT));
+                        if (wssRuns) CHECK(c.rungs.contains(WSS));
+                        EmptyReason why = EmptyReason::None;
+                        if (!webrtcRuns && !wssRuns) {
+                            bool rtc = familyAllows(pref, DCT), ws = familyAllows(pref, WSS);
+                            rtc = rtc && familyAllows(policy, DCT);
+                            ws = ws && familyAllows(policy, WSS);
+                            if (!rtc && !ws)
+                                why = EmptyReason::Policy;
+                            else if (!rtc && in.viaTunnel)
+                                why = EmptyReason::Tunnel;
+                            else
+                                why = EmptyReason::WebrtcUnavailable;
+                        }
+                        CHECK(c.emptyReason == why);
+
+                        // The mode: a request mode the policy and preference
+                        // allow, else the admin's, else auto.
+                        auto usable = [&](const QString& m) {
+                            if (m == QStringLiteral("auto") || m == QStringLiteral("all"))
+                                return true;
+                            return transportchain::isRung(m) && familyAllows(policy, m) &&
+                                   familyAllows(pref, m);
+                        };
+                        QString expected = QStringLiteral("auto");
+                        if (usable(admin)) expected = admin;
+                        if (usable(body)) expected = body;
+                        if (expected == QStringLiteral("all")) expected = QStringLiteral("auto");
+                        CHECK_EQ(c.mode, expected);
+                        // ...which leads the chain when it can run here.
+                        if (expected != QStringLiteral("auto") && runs(expected) &&
+                            !(in.dropUdp && expected.endsWith(QStringLiteral("-udp"))))
+                            CHECK_EQ(c.rungs.first(), expected);
+                        CHECK_EQ(c.dropped.isEmpty(), !(in.viaTunnel && expected == WSS));
+                        // MediaTrack only as the forced mode when the codec is not H.264.
+                        if (!in.mediaTrackAllowed)
+                            for (const QString& r : c.rungs)
+                                if (r.startsWith(QStringLiteral("webrtc-media")))
+                                    CHECK_EQ(r, expected);
+                        // UDP skipped only when there was a UDP rung to skip.
+                        CHECK_EQ(c.udpDropped, in.dropUdp && webrtcRuns);
+                    }
+    CHECK_EQ(combos, 3 * 3 * 9 * 9 * 32);
 }
 
 } // namespace
@@ -394,5 +555,7 @@ void run_transport_chain_tests()
     testUnknownModes();
     testEmptyReasonWire();
     testCapabilitiesParsing();
+    testPolicy();
+    testPreference();
     testInvariants();
 }

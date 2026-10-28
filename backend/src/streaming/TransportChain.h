@@ -18,6 +18,7 @@
 #pragma once
 
 #include "StreamConfig.h"
+#include "TransportPolicy.h"
 #include "TransportPriorities.h"
 
 #include <Limelight.h>
@@ -42,6 +43,8 @@ struct Inputs
     bool videoEnhancement = false;              ///< canvas rungs before MediaTrack
     bool mediaTrackAllowed = true;              ///< mediaTrackAllowed()'s verdict for the codec
     bool webrtcAvailable = true;                ///< the request's capabilities.webrtc
+    QString policy = QStringLiteral("all");     ///< AppSettings::allowedTransports()
+    QString pref = QStringLiteral("auto");      ///< the request's transport_pref
 };
 
 /// Why a chain came out empty before any attempt: the 409's `reason`.
@@ -158,15 +161,24 @@ inline QStringList autoOrder(bool videoEnhancement, bool mediaTrack)
 inline Chain build(const Inputs& in)
 {
     Chain out;
+    const QString policy = [&] {
+        const QString p = transportpolicy::normalizePolicy(in.policy);
+        return p.isEmpty() ? QStringLiteral("all") : p;
+    }();
+    const QString pref = transportpolicy::normalizePref(in.pref);
 
     // A per-request transport_mode overrides the admin setting; "all" is the
     // auto chain (it only makes the admin selector offer wss as well). A name
-    // that is no transport is ignored: it would otherwise run as wss.
-    auto known = [](const QString& m) {
-        return m == QLatin1String("auto") || m == QLatin1String("all") || isRung(m);
+    // that is no transport is ignored (it would otherwise run as wss), and so
+    // is one outside the policy or the preference: a request may not lift the
+    // admin's policy, and a saved mode it forbids falls back to auto.
+    auto usable = [&](const QString& m) {
+        if (m == QLatin1String("auto") || m == QLatin1String("all")) return true;
+        return isRung(m) && transportpolicy::familyAllows(policy, m) &&
+               transportpolicy::familyAllows(pref, m);
     };
-    QString mode = known(in.adminMode) ? in.adminMode : QStringLiteral("auto");
-    if (known(in.bodyMode)) mode = in.bodyMode;
+    QString mode = usable(in.adminMode) ? in.adminMode : QStringLiteral("auto");
+    if (usable(in.bodyMode)) mode = in.bodyMode;
     if (mode == QStringLiteral("all")) mode = QStringLiteral("auto");
     out.mode = mode;
 
@@ -185,23 +197,37 @@ inline Chain build(const Inputs& in)
             if (m != mode && m != sibling) out.rungs.append(m);
     }
 
-    // wss carries video over the TLS connection that served the page; through
-    // the rendezvous there is none, so it leaves the chain even when named.
-    if (in.viaTunnel && out.rungs.contains(QStringLiteral("wss"))) {
-        out.rungs.removeAll(QStringLiteral("wss"));
-        if (mode == QStringLiteral("wss")) out.dropped = QStringLiteral("wss");
-    }
-
-    // A browser without WebRTC (capabilities.webrtc false): every webrtc-* rung
-    // would fail on its deadline, so none is offered. Through the rendezvous
-    // that leaves nothing, and the browser is why.
-    if (!in.webrtcAvailable) {
+    // Each filter keeps the rungs it lets run; the first that takes the last
+    // one is why the chain is empty.
+    auto keep = [&out](auto runs, EmptyReason why) {
+        if (out.rungs.isEmpty()) return;
         QStringList kept;
         for (const QString& m : out.rungs)
-            if (!m.startsWith(QStringLiteral("webrtc-"))) kept.append(m);
+            if (runs(m)) kept.append(m);
         out.rungs = kept;
-        if (out.rungs.isEmpty()) out.emptyReason = EmptyReason::WebrtcUnavailable;
-    }
+        if (kept.isEmpty()) out.emptyReason = why;
+    };
+
+    // The browser's preference inside the admin's policy. Both filter: "wss"
+    // really turns WebRTC off, "webrtc" really takes wss away.
+    keep([&](const QString& m) { return transportpolicy::familyAllows(pref, m); },
+         EmptyReason::Policy);
+    keep([&](const QString& m) { return transportpolicy::familyAllows(policy, m); },
+         EmptyReason::Policy);
+
+    // wss carries video over the TLS connection that served the page; through
+    // the rendezvous there is none, so it leaves the chain even when named.
+    if (in.viaTunnel && mode == QStringLiteral("wss")) out.dropped = QStringLiteral("wss");
+    keep([&](const QString& m) { return !(in.viaTunnel && m == QLatin1String("wss")); },
+         EmptyReason::Tunnel);
+
+    // A browser without WebRTC (capabilities.webrtc false): every webrtc-* rung
+    // would fail on its deadline, so none is offered.
+    keep(
+        [&](const QString& m) {
+            return in.webrtcAvailable || !m.startsWith(QLatin1String("webrtc-"));
+        },
+        EmptyReason::WebrtcUnavailable);
 
     // Blocked UDP: skip the UDP rungs, never down to nothing.
     if (in.dropUdp) {

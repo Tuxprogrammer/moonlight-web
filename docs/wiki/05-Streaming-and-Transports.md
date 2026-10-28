@@ -16,7 +16,7 @@ The same Sunshine-side stream (RTSP/RTP/ENet handled by `moonlight-common-c`) ca
 | `webrtc-dc-tcp` | `DataChannelRelay` | same, ICE-TCP candidates | canvas | H.264/HEVC/AV1 | UDP-hostile networks |
 | `webrtc-media-udp` | `MediaTrackRelay` | RTP video+audio tracks, input DataChannel | `<video>` (browser decoder) | **H.264 only** | Browser-managed jitter/FEC/PLC; true-HDR-capable sink |
 | `webrtc-media-tcp` | `MediaTrackRelay` | same, ICE-TCP | `<video>` | H.264 only | |
-| `wss` | `StreamRelay` | one WebSocket (TLS), video+audio+input multiplexed | canvas | H.264/HEVC/AV1 | **LAN IP only, not user-selectable.** Rides the TLS connection that served the page, so it exists only for a browser opened directly on the host's LAN address; worst latency profile |
+| `wss` | `StreamRelay` | one WebSocket (TLS), video+audio+input multiplexed | canvas | H.264/HEVC/AV1 | **LAN IP only.** Rides the TLS connection that served the page, so it exists only for a browser opened directly on the host's LAN address (or a domain of the admin's own); worst latency profile. Chosen on purpose through the [policy and the browser's choice](#transport-policy-and-the-browsers-choice) |
 
 The two WebRTC families differ only in the **video** path: `-dc` fragments access units over SCTP for WebCodecs, `-media` sends a real RTP video track. Audio is an RTP Opus track in both; input is always the `input` DataChannel. `-udp` vs `-tcp` changes nothing but the ICE candidate types (`enableIceTcp`).
 
@@ -36,6 +36,15 @@ Rules applied when building the chain (`streaming/TransportChain.h`, one pure fu
 - A forced `-udp` mode promotes its `-tcp` sibling to second place (same family before switching). A `transport_mode` that names no transport reads as `auto`.
 - A browser without WebRTC says so in the start body, `capabilities: { webrtc: false }` (a guest's join too): every `webrtc-*` rung leaves the chain, so it never waits on a rung it cannot run. Absent, the browser is assumed to have it.
 - A chain left empty before any attempt — today a browser without WebRTC that came through the rendezvous, where `wss` cannot run — answers **409** `{error: "no_usable_transport", reason}`, `reason` ∈ `webrtc_unavailable` \| `policy` \| `tunnel` \| `udp_blocked` (the last is reserved: blocked UDP never removes the last rung). The page explains instead of relaunching. A `transport_index` past the end of a non-empty chain is still `502 All transport modes failed`.
+
+### Transport policy and the browser's choice
+
+Two settings narrow the chain; neither reorders it.
+
+- **The admin's policy**, `allowed_transports` ([Settings](07-Settings-Reference.md)): `all` (the default, everything above), `webrtc` (no `wss`, even named, even on the LAN) or `wss` (**WebSocket only**: no WebRTC rung at all). It applies to the owner and to guests. `transport_mode` keeps its meaning as the *order* inside what the policy allows: a saved mode the policy forbids reads as `auto`, and a request's `transport_mode` (power saving's MediaTrack, the codec fallback's proven rung) is ignored when the policy forbids it — a browser cannot lift the admin's choice. Set from the admin page, `--allowed-transports`, or `MW_ALLOWED_TRANSPORTS`.
+- **The browser's preference**, `transport_pref` in the start body (Settings → *Connection*: Automatic, WebRTC, WebSocket): filters inside the policy. The page offers only what `/api/internet/status` allows (`allowed_transports`), no WebRTC when it has none, and no WebSocket through the rendezvous.
+
+`wss` keeps every limit it had: it rides the TLS connection that served the page, so "WebSocket only" is a setting for browsers that open the host directly — its LAN IP, or a domain of the admin's own. Through the rendezvous it leaves the chain as before, and under `wss` that leaves nothing: the start answers `409 no_usable_transport` with `reason: "tunnel"` (`"policy"` when the browser's preference is outside the policy, `"webrtc_unavailable"` when only WebRTC is left and the browser has none).
 
 **The browser owns the loop**: the `/start` response is sent *before* ICE connects, so only the client can observe a connection failure. The full `transport_chain` and current `transport_index` are echoed in the response; on failure the frontend relaunches with `transport_index + 1`. Manual transport selection precedes automatic fallback.
 
