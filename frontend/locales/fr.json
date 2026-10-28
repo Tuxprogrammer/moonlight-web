@@ -386,7 +386,10 @@
         "title": "Appairer avec {{name}}",
         "instruction": "Saisissez ce PIN dans Sunshine pour autoriser le client :",
         "contacting": "Contact de l'hôte...",
+        "waitingForHost": "En attente de la demande d'appairage sur {{name}}…",
         "enterPin": "Saisissez ce PIN dans Sunshine (interface Web ou stdin sur l'hôte)",
+        "verifying": "PIN saisi, vérification en cours…",
+        "stillWaiting": "Toujours en attente de {{name}}. Vérifiez que Sunshine y est lancé et affiche la demande d'appairage, ou réessayez.",
         "unexpectedResponse": "Réponse inattendue du serveur.",
         "contactFailed": "Échec du contact du serveur : {{message}}",
         "paired": "Appairage réussi !"

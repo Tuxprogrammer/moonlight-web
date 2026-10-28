@@ -19,13 +19,23 @@
  * MoonlightWeb — Pairing dialog
  *
  * Flow:
- *   1. POST /api/hosts/:id/pair/start → backend does stage 1, returns PIN
- *   2. Dialog displays PIN, auto-polls POST /api/hosts/:id/pair (stages 2-5)
- *   3. User enters PIN in Sunshine → next POST poll succeeds → paired
+ *   1. POST /api/hosts/:id/pair/start → returns the PIN; the backend sends the
+ *      host the request it shows to its owner (stage 1)
+ *   2. Dialog displays the PIN and polls POST /api/hosts/:id/pair, which says
+ *      where it stands (`stage`): waiting for the host to show the request,
+ *      the host has it (enter the PIN), the PIN is being checked
+ *   3. User enters the PIN in Sunshine → a later poll answers paired
  */
 import { BackendClient } from '../api/BackendClient.js';
 import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
+
+/** Poll this often until the host has the request, so the PIN prompt is prompt. */
+const POLL_WAITING_MS = 1000;
+/** Then this often: the backend restarts a chain that ended on each poll. */
+const POLL_MS = 5000;
+/** Past this with no answer, the dialog says it is still waiting and offers Retry. */
+const STILL_WAITING_MS = 60000;
 
 export class PairDialog {
     constructor(host) {
@@ -33,8 +43,15 @@ export class PairDialog {
         this.overlay = null;
         this.pin = null;
         this.pollTimer = null;
+        this.stillWaitingTimer = null;
         this.onComplete = null;
         this.onCancel = null;
+        // Where the pairing stands: 'contacting' | 'enter_pin' | 'verifying'.
+        this._stage = null;
+        this._hostContacted = false;
+        this._stillWaiting = false;
+        // Bumped on every (re)start, so a poll from before a Retry is ignored.
+        this._attempt = 0;
     }
 
     show() {
@@ -53,31 +70,35 @@ export class PairDialog {
     }
 
     async startPairing() {
-        const statusEl = this.overlay.querySelector('.pairing-status-text');
-        const pinEl = this.overlay.querySelector('.pairing-pin-display');
+        const attempt = ++this._attempt;
+        this._stillWaiting = false;
+        this._setRetryVisible(false);
 
         try {
             const result = await this._startPairingWithRetry();
+            if (!this.overlay || attempt !== this._attempt) return;
 
             if (result.status === 'initiated' && result.pin) {
                 this.pin = result.pin;
+                const pinEl = this.overlay.querySelector('.pairing-pin-display');
                 pinEl.textContent = this.pin;
                 pinEl.classList.add('visible');
-                statusEl.textContent = t('pairing.enterPin');
-                statusEl.className = 'pairing-status-text pairing-info';
+                this._applyStage(result);
 
-                // Auto-poll for completion
+                // Auto-poll for completion; a minute on, say it is still waiting.
                 this.pollPairing();
+                this.stillWaitingTimer = setTimeout(
+                    () => this._showStillWaiting(),
+                    STILL_WAITING_MS,
+                );
             } else if (result.status === 'error') {
-                statusEl.textContent = result.message;
-                statusEl.className = 'pairing-status-text pairing-error';
+                this._showError(result.message);
             } else {
-                statusEl.textContent = t('pairing.unexpectedResponse');
-                statusEl.className = 'pairing-status-text pairing-error';
+                this._setStatus(t('pairing.unexpectedResponse'), 'pairing-error');
             }
         } catch (err) {
-            statusEl.textContent = t('pairing.contactFailed', { message: err.message });
-            statusEl.className = 'pairing-status-text pairing-error';
+            if (!this.overlay || attempt !== this._attempt) return;
+            this._showError(t('pairing.contactFailed', { message: err.message }));
         }
     }
 
@@ -98,14 +119,16 @@ export class PairDialog {
     }
 
     pollPairing() {
-        // Stage 1 blocks up to 60s — schedule next poll only after previous completes
+        // One poll at a time: the next is scheduled only after the previous answers.
+        const attempt = this._attempt;
+        const delay = () => (this._hostContacted ? POLL_MS : POLL_WAITING_MS);
         const tick = async () => {
-            if (!this.overlay) return; // dialog closed
+            if (!this.overlay || attempt !== this._attempt) return; // closed, or retried
             await this.tryComplete();
-            if (!this.overlay) return;
-            this.pollTimer = setTimeout(tick, 5000);
+            if (!this.overlay || attempt !== this._attempt || !this.pollTimer) return;
+            this.pollTimer = setTimeout(tick, delay());
         };
-        this.pollTimer = setTimeout(tick, 5000);
+        this.pollTimer = setTimeout(tick, delay());
     }
 
     stopPolling() {
@@ -113,30 +136,94 @@ export class PairDialog {
             clearTimeout(this.pollTimer);
             this.pollTimer = null;
         }
+        if (this.stillWaitingTimer) {
+            clearTimeout(this.stillWaitingTimer);
+            this.stillWaitingTimer = null;
+        }
     }
 
     async tryComplete() {
-        const statusEl = this.overlay.querySelector('.pairing-status-text');
-
+        const attempt = this._attempt;
         try {
             const result = await BackendClient.confirmPairing(this.host.uuid);
+            if (!this.overlay || attempt !== this._attempt) return;
 
             if (result.status === 'paired') {
                 this.stopPolling();
-                statusEl.textContent = t('pairing.paired');
-                statusEl.className = 'pairing-status-text pairing-success';
+                this._setRetryVisible(false);
+                this._setStatus(t('pairing.paired'), 'pairing-success');
                 if (this.onComplete) this.onComplete();
                 setTimeout(() => this.close(), 1500);
             } else if (result.status === 'awaiting_pin') {
                 // Still waiting — keep polling, keep the PIN displayed
+                this._applyStage(result);
             } else if (result.status === 'error') {
-                this.stopPolling();
-                statusEl.textContent = result.message;
-                statusEl.className = 'pairing-status-text pairing-error';
+                this._showError(result.message);
             }
         } catch (err) {
             // Network error — keep polling
         }
+    }
+
+    /**
+     * Say where the pairing stands. A server that reports no `stage` (an older
+     * backend) is read as "the host has it", the wording this dialog always had.
+     */
+    _applyStage(result) {
+        const stage = result.stage || 'enter_pin';
+        this._stage = stage;
+        this._hostContacted = result.stage ? result.host_contacted !== false : true;
+        if (stage === 'verifying') {
+            this._stillWaiting = false;
+            this._setRetryVisible(false);
+            this._setStatus(t('pairing.verifying'), 'pairing-info');
+            return;
+        }
+        if (this._stillWaiting) return; // the soft message stays until something moves
+        if (stage === 'contacting') {
+            this._setStatus(
+                t('pairing.waitingForHost', { name: this.host.displayName }),
+                'pairing-info',
+            );
+        } else {
+            this._setStatus(t('pairing.enterPin'), 'pairing-info');
+        }
+    }
+
+    /** A minute and no pairing yet: not an error, the PIN stays, Retry appears. */
+    _showStillWaiting() {
+        this.stillWaitingTimer = null;
+        if (!this.overlay || this._stage === 'verifying') return;
+        this._stillWaiting = true;
+        this._setStatus(t('pairing.stillWaiting', { name: this.host.displayName }), 'pairing-info');
+        this._setRetryVisible(true);
+    }
+
+    _showError(message) {
+        this.stopPolling();
+        this._setStatus(message, 'pairing-error');
+        this._setRetryVisible(true);
+    }
+
+    /** Start over: a fresh pair/start, and the dialog back in its waiting state. */
+    _retry() {
+        this.stopPolling();
+        this._stage = null;
+        this._hostContacted = false;
+        this._setStatus(t('pairing.contacting'), 'pairing-info');
+        this.startPairing();
+    }
+
+    _setStatus(text, kind) {
+        if (!this.overlay) return;
+        const statusEl = this.overlay.querySelector('.pairing-status-text');
+        statusEl.textContent = text;
+        statusEl.className = 'pairing-status-text ' + kind;
+    }
+
+    _setRetryVisible(visible) {
+        if (!this.overlay) return;
+        this.overlay.querySelector('.btn-pair-retry').hidden = !visible;
     }
 
     render() {
@@ -153,6 +240,7 @@ export class PairDialog {
                     <p class="pairing-status-text pairing-info">${t('pairing.contacting')}</p>
                 </div>
                 <div class="pairing-actions">
+                    <button class="btn btn-primary btn-pair-retry" hidden>${t('common.retry')}</button>
                     <button class="btn btn-secondary btn-pair-cancel">${t('common.cancel')}</button>
                 </div>
             </div>
@@ -160,6 +248,10 @@ export class PairDialog {
     }
 
     bindEvents() {
+        this.overlay
+            .querySelector('.btn-pair-retry')
+            .addEventListener('click', () => this._retry());
+
         this.overlay.querySelector('.btn-pair-cancel').addEventListener('click', () => {
             this.close();
             if (this.onCancel) this.onCancel();

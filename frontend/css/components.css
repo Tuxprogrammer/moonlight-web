@@ -1119,6 +1119,10 @@ body.ios .settings-checkbox-label input[type='checkbox']:checked::before {
 .pairing-actions .btn {
     min-width: 100px;
 }
+/* .btn's inline-flex outranks the browser's own [hidden] handling. */
+.pairing-actions .btn[hidden] {
+    display: none;
+}
 /* Stacked variant — buttons on their own row, full width. Used by dialogs with
    long labels (e.g. "Open Screen Recording settings") that would otherwise be
    clipped by the row layout + white-space: nowrap. */

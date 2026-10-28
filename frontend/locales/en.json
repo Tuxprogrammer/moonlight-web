@@ -386,7 +386,10 @@
         "title": "Pair with {{name}}",
         "instruction": "Enter this PIN in Sunshine to authorize the client:",
         "contacting": "Contacting host...",
+        "waitingForHost": "Waiting for {{name}} to show the pairing request…",
         "enterPin": "Enter this PIN in Sunshine (Web UI or stdin on the host)",
+        "verifying": "PIN entered, checking it…",
+        "stillWaiting": "Still waiting for {{name}}. Check that Sunshine is running there and shows the pairing request, or try again.",
         "unexpectedResponse": "Unexpected response from server.",
         "contactFailed": "Failed to contact server: {{message}}",
         "paired": "Paired successfully!"
