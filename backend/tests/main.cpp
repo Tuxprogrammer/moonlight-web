@@ -61,6 +61,7 @@ void run_tunnel_peer_policy_tests();
 void run_app_manifest_tests();
 void run_wolf_coop_tests();
 void run_start_choice_tests();
+void run_transport_chain_tests();
 void run_relaunch_script_tests();
 void run_client_unique_id_tests();
 void run_multiseat_tests();
@@ -135,6 +136,7 @@ int main(int argc, char** argv)
     run_app_manifest_tests();
     run_wolf_coop_tests();
     run_start_choice_tests();
+    run_transport_chain_tests();
     run_relaunch_script_tests();
     run_client_unique_id_tests();
     run_multiseat_tests();
