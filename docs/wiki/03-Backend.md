@@ -126,7 +126,7 @@ All under `QStandardPaths::AppDataLocation` (e.g. `%APPDATA%\MoonlightWeb\Moonli
 
 ## 3.7 Headless operator CLI
 
-On a server there is no browser on the machine, and the admin API is localhost-only — so the two ends never meet. Five flags close the gap by driving the **already-running** instance through the very endpoints the admin page calls, printing the result as text and exiting. They branch **before** the single-instance `QLockFile` (they are queries against another process, not a second server) and route the log echo to stderr so stdout carries only the report.
+On a server there is no browser on the machine, and the admin API is localhost-only — so the two ends never meet. A handful of flags close the gap by driving the **already-running** instance through the very endpoints the admin page calls, printing the result as text and exiting. They branch **before** the single-instance `QLockFile` (they are queries against another process, not a second server) and route the log echo to stderr so stdout carries only the report.
 
 | Flag | Endpoint(s) | Prints |
 |---|---|---|
@@ -134,6 +134,11 @@ On a server there is no browser on the machine, and the admin API is localhost-o
 | `--new-pin` | `POST /api/admin/pin/generate` | A fresh access PIN. Deliberately the non-revoking endpoint (`/api/auth/regenerate` destroys every session) |
 | `--enable-internet [--yes]` | `POST /api/internet/enable` | Prints the consent text, requires `yes` on a TTY (or `--yes`), sends that exact text as `consent_message` so the consent record keeps what was shown, then the router verdict |
 | `--set-admin-password` / `--clear-admin-password [--yes]` | `POST /api/admin/password` | Sets or removes the remote admin password ([Security §6.2.1](06-Security.md#621-remote-admin-password-lan-internet-on-request)) |
+| `--list-sessions [--json]` | `GET /api/auth/sessions` | The signed-in browsers: short id, device, address, created, last seen, flags (`host`, `admin`, `tunnel`, `ephemeral`, `streaming`, and the sign-in method when the server reports one). `--json` prints the server's array unchanged, with the whole ids |
+| `--revoke-session <id>` | `GET /api/auth/sessions`, then `POST /api/auth/sessions/revoke` | Signs out one browser. Takes the whole id or a unique prefix of at least 4 characters (case-sensitive: ids are base64url). The id is resolved against the list first, because the route answers `revoked` for an id it does not know. A streaming session's stream stops. The terminal holds no session cookie, so `cannot_revoke_self` cannot apply; it is reported if it ever does |
+| `--set <key=value>` (repeatable) / `--get <key>\|all [--json]` | `/api/settings/streaming`, `/api/admin/settings` | Changes or prints the allow-listed settings ([Settings §7.6](07-Settings-Reference.md#76-from-a-terminal---get-and---set)). Everything is checked before anything is sent; never writes `settings.json` |
+
+The sessions and settings commands live in `server/OperatorCli` and reach the server through a small seam (`Instance`: connect, get, admin post), so their whole flow is unit-tested against a fake server. They print the report on stdout and errors on stderr, so `--list-sessions --json | jq` never sees a message. They exit `0` when done, `1` when the server is not running or refused, and `2` when the command line is wrong. A usage error is reported before the server is looked for, so a typo reads as a typo even with the server down. There is no `--revoke-all-sessions`: the only server-side "revoke everything" is `POST /api/auth/regenerate`, which also replaces the PIN, and a loop over the list would race new sign-ins.
 
 The loopback port is read from this user's `settings.json` (or from the `--config` file given to the command), then falls back to 443 — running the CLI as a different user than the service (a `sudo`-less `moonlightweb --status` against a root-owned unit) reads a different file, or none. Peer verification is off for these calls: the certificate on 127.0.0.1 is the self-signed LAN one, and no certificate authenticates a loopback socket better than the kernel already does.
 
