@@ -917,7 +917,7 @@ export const MoonlightApp = {
      * instead of re-deriving "is this just the LAN IP" from the parts.
      *
      * Returns { url, remote, rendezvousUrl, rendezvousOnline, domain, localIp,
-     * httpsPort, extPort, upnpAvailable, internetActive } or null on failure
+     * httpsPort, extPort, upnpAvailable, internetActive, lanOnly } or null on failure
      * (url may be '' when nothing is known).
      * Callable from any machine: a LAN browser gets the rendezvous address and
      * nothing else, a remote one gets neither and lands on `url === ''`.
@@ -931,6 +931,7 @@ export const MoonlightApp = {
         let internetActive = false;
         let rendezvousUrl = '';
         let rendezvousOnline = false;
+        let lanOnly = false;
         try {
             // Settled, not all: the internet status is what every caller needs,
             // and the admin settings only supply a port fallback. Failing the
@@ -949,6 +950,8 @@ export const MoonlightApp = {
             extPort = status.external_https_port || httpsPort;
             upnpAvailable = !!status.upnp_available;
             internetActive = !!status.active && !!status.internet_access_enabled;
+            // MW_LAN_ONLY: the switch refuses to turn on, whoever asks.
+            lanOnly = status.lan_only === true;
             // Redacted for anything but a loopback caller or a browser sitting
             // on this LAN (it carries this instance's permanent identifier) —
             // see the route. A remote session falls through to the LAN IP below,
@@ -985,6 +988,7 @@ export const MoonlightApp = {
             extPort,
             upnpAvailable,
             internetActive,
+            lanOnly,
         };
     },
 
@@ -996,9 +1000,10 @@ export const MoonlightApp = {
      *      LAN admin holding the password is already one of those other
      *      devices, and would be told the address of the page it is reading.
      *   2. The address hint — on every machine. Either "nothing outside this
-     *      network reaches this server, turn Internet Access on", or, once it
-     *      is on and this browser came in on the LAN address anyway, the public
-     *      address that works from anywhere.
+     *      network reaches this server, turn Internet Access on" (not on a
+     *      LAN-only instance, where the switch refuses), or, once it is on and
+     *      this browser came in on the LAN address anyway, the public address
+     *      that works from anywhere.
      *
      * One status fetch for both, and both mounted together so their order on
      * screen never depends on which request answered first.
@@ -1089,6 +1094,9 @@ export const MoonlightApp = {
             // Booth mode (--noadmin): nobody here can turn it on, so the
             // pointer at the admin page has nowhere to lead.
             if (BackendClient.adminLocked) return null;
+            // LAN-only (MW_LAN_ONLY): the switch refuses to turn on, so a
+            // pointer at it would lead to a setting that cannot help.
+            if (info.lanOnly) return null;
             // The action is a clause of the sentence, not a second copy of it
             // bolted on the end. Built by escaping the whole translated line
             // first and putting the anchor back at a marker no escape touches,
