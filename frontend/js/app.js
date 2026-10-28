@@ -660,7 +660,7 @@ export const MoonlightApp = {
                     console.warn(
                         `[MW] Guest: ${chain[at]} failed (${reason}) — trying ${chain[next]}`,
                     );
-                    Toast.warning(
+                    const trying = Toast.warning(
                         t('transport.connectFailed', {
                             from: this._transportLabel(chain[at]),
                             to: this._transportLabel(chain[next]),
@@ -674,7 +674,7 @@ export const MoonlightApp = {
                     } catch (err) {
                         console.error('[MW] Guest relaunch failed:', err);
                         const noTransport = noUsableTransportReason(err);
-                        if (noTransport !== null) Toast.error(t(noUsableTransportKey(noTransport)));
+                        if (noTransport !== null) this._sayNoUsableTransport(noTransport, trying);
                         view.refresh();
                     }
                 };
@@ -2006,7 +2006,9 @@ export const MoonlightApp = {
                 (hdrOverride !== undefined ? ` (forced HDR: ${hdrOverride})` : ''),
         );
         this.transition('launching');
-        Toast.info(t('launch.launching', { name: app.name }));
+        // Kept to be taken down when the launch fails: it would otherwise
+        // stay up beside the error that says why.
+        const launchingToast = Toast.info(t('launch.launching', { name: app.name }));
         // A Mac without Accessibility streams a picture that ignores every
         // press, and macOS says nothing: said here, once per launch.
         if (!codecOverride && host.lacksInputPermission)
@@ -2446,6 +2448,7 @@ export const MoonlightApp = {
                 // any bridging loader stayed up — only a reload got out of it,
                 // and the reload landed on the same dead end.
                 console.error('[MW] Launch returned an unexpected status:', result.status);
+                launchingToast?.dismiss();
                 iosAudioUnlock.release();
                 this._hideRelaunchLoader();
                 if (this.hostListView) {
@@ -2457,6 +2460,8 @@ export const MoonlightApp = {
             }
         } catch (err) {
             console.error('[MW] Launch failed:', err);
+            // "Launching…" is over, whatever comes next says how.
+            launchingToast?.dismiss();
             // Launch failed before the audio pipeline could take over the iOS
             // session hold — release it so we don't keep a silent element looping.
             iosAudioUnlock.release();
@@ -2492,7 +2497,7 @@ export const MoonlightApp = {
             const noTransport = noUsableTransportReason(err);
             if (noTransport !== null) {
                 console.error(`[MW] No usable transport (${noTransport || '?'}) — not streaming`);
-                Toast.error(t(noUsableTransportKey(noTransport)));
+                this._sayNoUsableTransport(noTransport);
                 this.transition('app_list');
                 return;
             }
@@ -3766,6 +3771,18 @@ export const MoonlightApp = {
     },
 
     /**
+     * Say why nothing can stream (409 no_usable_transport), taking down the
+     * toasts that said the launch was under way ("Launching…", the chain's
+     * "trying …"): left up, they sat beside the error that contradicts them.
+     * @param {string|null} reason the backend's reason
+     * @param {...({dismiss: () => void}|null|undefined)} pending toasts to take down
+     */
+    _sayNoUsableTransport(reason, ...pending) {
+        for (const toast of pending) toast?.dismiss?.();
+        Toast.error(t(noUsableTransportKey(reason)));
+    },
+
+    /**
      * The first rung at or after @p from this browser can try: every webrtc-*
      * rung is skipped once WebRTC is known to be missing here, and only a
      * native-media one is left after the decoder failed (@p mediaOnly).
@@ -3815,7 +3832,7 @@ export const MoonlightApp = {
         if (String(reason).startsWith(NO_USABLE_TRANSPORT)) {
             const why = String(reason).slice(NO_USABLE_TRANSPORT.length + 1);
             console.error(`[MW] No usable transport (${why || '?'}) — ending the launch`);
-            Toast.error(t(noUsableTransportKey(why)));
+            this._sayNoUsableTransport(why, this._chainToast);
             this._endAfterFailedLaunch();
             return;
         }
@@ -3860,7 +3877,7 @@ export const MoonlightApp = {
                     );
                     // Not "connection failed": this rung never got as far as
                     // a connection, the host did not start it.
-                    Toast.warning(
+                    this._chainToast = Toast.warning(
                         t('transport.launchFailedNext', {
                             from: this._transportLabel(chain[cur]),
                             to: this._transportLabel(chain[nextRung]),
@@ -3940,7 +3957,7 @@ export const MoonlightApp = {
         if (next < chain.length) {
             if (!this._spendChainRelaunch('transport')) return;
             console.warn(`[MW] Transport ${chain[cur]} failed (${reason}) — trying ${chain[next]}`);
-            Toast.warning(
+            this._chainToast = Toast.warning(
                 noWebrtc
                     ? t('transport.webrtcOffNext', { to: this._transportLabel(chain[next]) })
                     : t('transport.connectFailed', {
