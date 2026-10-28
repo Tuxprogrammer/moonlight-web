@@ -946,7 +946,8 @@
         "hevcH264Unsupported": "HEVC and H.264 both unsupported by browser",
         "hdrFallback": "HDR unavailable — switched to {{to}} without HDR",
         "chroma444Fallback": "4:4:4 unavailable — switched to H.264 in 4:2:0",
-        "tvOverAsk": "This TV may not keep up with {{height}}p at {{fps}} fps — Auto picks {{autoHeight}}p at {{autoFps}} fps."
+        "tvOverAsk": "This TV may not keep up with {{height}}p at {{fps}} fps — Auto picks {{autoHeight}}p at {{autoFps}} fps.",
+        "relaunchLimit": "The stream kept failing to start — stopped after several automatic attempts. Try again, or pick another codec in Settings."
     },
     "permission": {
         "videoCapture": {
