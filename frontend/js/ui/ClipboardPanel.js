@@ -28,8 +28,8 @@
  *    the host clipboard, and Send sets it (`clipboardset`) without pressing
  *    anything.
  *  - Typing (every other host — GameStream has no clipboard channel): Send
- *    types the text on the host through the `textinput` path, in small paced
- *    chunks, with a cap, a progress bar and Cancel.
+ *    types the text on the host through the `textinput` path, one character
+ *    per message at a steady pace, with a cap, a progress bar and Cancel.
  * "Copy to this device" writes the box to the local clipboard; the click is
  * the gesture `writeText` needs.
  *
@@ -50,21 +50,23 @@ export const SETTINGS_KEY = 'mw-streaming-settings';
 /** Max text set on the host clipboard — mirrors ClipboardBridge::kMaxTextChars. */
 export const MAX_SET_CHARS = 262144;
 
-/** Max text typed on the host: about half a minute at the pace below. */
+/** Max characters typed on the host: about five minutes at the pace below. */
 export const MAX_TYPE_CHARS = 10000;
 
 /**
- * Bytes of UTF-8 per `textinput` while typing — moonlight-common-c's own
- * text packet (UTF8_TEXT_EVENT_MAX_COUNT). Small chunks keep Cancel prompt
- * and the host's per-character injection from queueing up.
+ * Pause between two typed characters. Each one is a `textinput` message of its
+ * own: Sunshine on Linux types a character as a Ctrl+Shift+U, hex, space
+ * sequence, and several in one message came out mangled (`#$%&` arrived as
+ * "5b", `é ü ß` were dropped), while one per message arrived byte for byte.
+ * The pause keeps each sequence (about eight key events) apart from the next
+ * one on a busy host. On a test VM without KVM, 30, 60 and 250 ms all left
+ * the odd sequence broken by the guest itself, so a slower pace bought nothing
+ * there; 30 ms types about 33 characters a second.
  */
-export const TYPE_CHUNK_BYTES = 32;
+export const TYPE_INTERVAL_MS = 30;
 
-/** Pause between two chunks. */
-export const TYPE_INTERVAL_MS = 50;
-
-/** A Ctrl+V typing more chunks than this shows a toast with Cancel. */
-const PASTE_TOAST_STEPS = 4;
+/** A Ctrl+V typing for longer than about a second shows a toast with Cancel. */
+const PASTE_TOAST_STEPS = Math.ceil(1000 / TYPE_INTERVAL_MS);
 
 /** Windows virtual key of Enter: a line break is typed as the key. */
 const VK_RETURN = 0x0d;
@@ -103,49 +105,25 @@ export function capText(text, max) {
     return text.slice(0, n);
 }
 
-/** UTF-8 length of one code point. */
-function utf8Bytes(cp) {
-    if (cp < 0x80) return 1;
-    if (cp < 0x800) return 2;
-    if (cp < 0x10000) return 3;
-    return 4;
+/** The first `max` code points of `text`: an emoji counts as one character. */
+export function capCodePoints(text, max) {
+    const points = Array.from(text);
+    return points.length <= max ? text : points.slice(0, Math.max(0, max)).join('');
 }
 
 /**
- * The text cut into what typing sends, in order: `{ text }` chunks of at most
- * `maxBytes` UTF-8 bytes, never splitting a character, and `{ enter: true }`
- * for each line break (\r\n, \r or \n) — a key, since a newline sent as text
- * types nothing in most host apps. `chars` is how many characters each step
- * stands for, for the progress bar.
+ * The text as typing sends it, in order: one `{ text }` step per code point
+ * (Array.from, so a surrogate pair — an emoji — is never split) and
+ * `{ enter: true }` for each line break (\r\n, \r or \n) — a key, since a
+ * newline sent as text types nothing in most host apps. Each step is one
+ * character of the progress bar.
  *
  * @returns {Array<{ text?: string, enter?: boolean, chars: number }>}
  */
-export function typingSteps(text, maxBytes = TYPE_CHUNK_BYTES) {
-    const steps = [];
-    let chunk = '';
-    let bytes = 0;
-    let chars = 0;
-    const flush = () => {
-        if (chunk) steps.push({ text: chunk, chars });
-        chunk = '';
-        bytes = 0;
-        chars = 0;
-    };
-    const normalized = text.replace(/\r\n?/g, '\n');
-    for (const ch of normalized) {
-        if (ch === '\n') {
-            flush();
-            steps.push({ enter: true, chars: 1 });
-            continue;
-        }
-        const b = utf8Bytes(ch.codePointAt(0));
-        if (bytes + b > maxBytes) flush();
-        chunk += ch;
-        bytes += b;
-        chars++;
-    }
-    flush();
-    return steps;
+export function typingSteps(text) {
+    return Array.from(text.replace(/\r\n?/g, '\n'), (ch) =>
+        ch === '\n' ? { enter: true, chars: 1 } : { text: ch, chars: 1 },
+    );
 }
 
 /** The three modifiers of the control combos, as KeyboardEvent codes. */
@@ -521,7 +499,7 @@ export class ClipboardPanel {
     typeText(text, opts = {}) {
         if (!this._canType() || !text) return false;
         if (this._typer) this._typer.cancel();
-        const capped = capText(text, MAX_TYPE_CHARS);
+        const capped = capCodePoints(text, MAX_TYPE_CHARS);
         const steps = typingSteps(capped);
         if (steps.length === 0) return false;
         const truncated = capped.length < text.length;
