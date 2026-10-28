@@ -133,6 +133,14 @@ import {
 import { SecuringOverlay } from './ui/SecuringOverlay.js';
 import { ourStunHost } from './api/IceServers.js';
 import { probeUdp } from './api/UdpProbe.js';
+import {
+    NO_USABLE_TRANSPORT,
+    WEBRTC_UNAVAILABLE,
+    nextUsableRung,
+    noUsableTransportKey,
+    noUsableTransportReason,
+    webrtcAvailable,
+} from './api/WebRtcSupport.js';
 import { InstanceMenu } from './ui/InstanceMenu.js';
 import { currentInstanceRef, importInstances, rememberInstance } from './util/instances.js';
 
@@ -510,6 +518,8 @@ export const MoonlightApp = {
                 // crash again (stream/CrashRelaunch.js), as the owner's launch.
                 if (!rejoin.reconnectOf && transportIndex === 0 && !codec) {
                     this._crashRelaunches = [];
+                    // Without WebRTC, every webrtc-* rung is skipped (_nextRung).
+                    this._webrtcUnavailable = !webrtcAvailable();
                 }
                 // Same question as the owner's launch, same one-minute memory:
                 // a guest on a network that blocks UDP skips the UDP rungs.
@@ -608,11 +618,15 @@ export const MoonlightApp = {
                     else view.refresh();
                 };
                 streamView.onConnectionFailed = async (reason) => {
-                    const next = at + 1;
+                    if (reason === WEBRTC_UNAVAILABLE) this._webrtcUnavailable = true;
+                    const next = this._nextRung(chain, at + 1);
                     // MW-BIND refused the host: no fallback, same rule as the
                     // owner's (the wss rung has nothing to bind).
                     if (reason === IDENTITY_REFUSED || next >= chain.length) {
                         console.error(`[MW] Guest: ${chain[at] || '?'} failed (${reason})`);
+                        // Ended by missing WebRTC: say so, the guest can act on it.
+                        if (reason === WEBRTC_UNAVAILABLE)
+                            Toast.error(t('transport.noUsable.webrtc_unavailable'));
                         streamView.quit();
                         return;
                     }
@@ -632,6 +646,8 @@ export const MoonlightApp = {
                         await view.onJoin({ height, gaming, touchScreen, padKey }, next, codec);
                     } catch (err) {
                         console.error('[MW] Guest relaunch failed:', err);
+                        const noTransport = noUsableTransportReason(err);
+                        if (noTransport !== null) Toast.error(t(noUsableTransportKey(noTransport)));
                         view.refresh();
                     }
                 };
@@ -2003,6 +2019,9 @@ export const MoonlightApp = {
             // rest of the launch is prepared, read just before /start: a
             // relaunch in this session keeps the same answer.
             this._udpProbe = this._probeUdpCached();
+            // No WebRTC in this browser: /start is told (capabilities), and the
+            // chain skips every webrtc-* rung whatever the backend sends.
+            this._webrtcUnavailable = !webrtcAvailable();
         }
 
         // Store host/app for HEVC fallback re-launch
@@ -2417,6 +2436,15 @@ export const MoonlightApp = {
             }
             if (err && err.responseBody && err.responseBody.code === 'video_capture_failed') {
                 this._showVideoCaptureHelp(host, app, err.message, err.responseBody);
+                this.transition('app_list');
+                return;
+            }
+            // Nothing the server offers is something this browser can carry
+            // (409 no_usable_transport): said in so many words, never retried.
+            const noTransport = noUsableTransportReason(err);
+            if (noTransport !== null) {
+                console.error(`[MW] No usable transport (${noTransport || '?'}) — not streaming`);
+                Toast.error(t(noUsableTransportKey(noTransport)));
                 this.transition('app_list');
                 return;
             }
@@ -3547,6 +3575,8 @@ export const MoonlightApp = {
             this._udpProbeCache = { at: Date.now(), verdict };
             if (verdict === false)
                 console.log('[MW] UDP probe: no STUN answer in 1.5 s — UDP looks blocked here');
+            else if (verdict === null && !webrtcAvailable())
+                console.log('[MW] UDP probe: no WebRTC in this browser — WebRTC rungs skipped');
             return verdict;
         });
     },
@@ -3624,6 +3654,15 @@ export const MoonlightApp = {
     },
 
     /**
+     * The first rung at or after @p from this browser can try: every webrtc-*
+     * rung is skipped once WebRTC is known to be missing here, and only a
+     * native-media one is left after the decoder failed (@p mediaOnly).
+     */
+    _nextRung(chain, from, mediaOnly = false) {
+        return nextUsableRung(chain, from, { webrtc: !this._webrtcUnavailable, mediaOnly });
+    },
+
+    /**
      * A transport failed to establish a connection. If there is a next entry in
      * the priority chain, relaunch with it (warning toast). Otherwise show a
      * final error and return to the apps view.
@@ -3659,6 +3698,24 @@ export const MoonlightApp = {
             return;
         }
 
+        // A relaunch the backend answered with 409: nothing it may offer is
+        // something this browser can carry. Final, and said so.
+        if (String(reason).startsWith(NO_USABLE_TRANSPORT)) {
+            const why = String(reason).slice(NO_USABLE_TRANSPORT.length + 1);
+            console.error(`[MW] No usable transport (${why || '?'}) — ending the launch`);
+            Toast.error(t(noUsableTransportKey(why)));
+            this._endAfterFailedLaunch();
+            return;
+        }
+
+        // No WebRTC in this browser (a backend that ignored capabilities, or a
+        // constructor that refused): every webrtc-* rung fails the same way.
+        const noWebrtc = reason === WEBRTC_UNAVAILABLE;
+        if (noWebrtc && !this._webrtcUnavailable) {
+            console.warn('[MW] This browser has no WebRTC — skipping every webrtc-* rung');
+            this._webrtcUnavailable = true;
+        }
+
         // The launch itself never returned a session (timeout, 502, Sunshine
         // refusal). Nothing was tried at the transport level — no offer, no ICE
         // — so walking down the chain would spend the remaining transports on a
@@ -3682,7 +3739,7 @@ export const MoonlightApp = {
                 // phone whose UDP path is blocked needs. Walk on instead, but
                 // without granting another launch retry: one attempt per rung,
                 // so a genuinely wedged host still costs seconds, not minutes.
-                const nextRung = cur + 1;
+                const nextRung = this._nextRung(chain, cur + 1);
                 if (!exhausted && this._firstTransportRetried && nextRung < chain.length) {
                     console.warn(
                         `[MW] Launch failed on ${chain[cur]} after a transport failure —` +
@@ -3748,8 +3805,11 @@ export const MoonlightApp = {
         // a UDP-blocked network wait twice as long for the rung that works.
         // The flag still records that a transport failed: the launch_failed
         // branch above walks on rather than giving up once it is set.
-        const iceTimedOut = /ice timeout/i.test(String(reason));
-        if (cur === 0 && iceTimedOut) this._firstTransportRetried = true;
+        //
+        // Nor after the connect watchdog (a deadline spent too), nor without
+        // WebRTC, which fails the same way on every try.
+        const iceTimedOut = /ice timeout/i.test(String(reason)) || reason === 'connect_timeout';
+        if (cur === 0 && (iceTimedOut || noWebrtc)) this._firstTransportRetried = true;
         if (cur === 0 && !this._firstTransportRetried && !decoderFail && !iceTimedOut) {
             this._firstTransportRetried = true;
             console.warn(`[MW] Transport ${chain[0]} failed (${reason}) — retrying once (silent)`);
@@ -3757,27 +3817,31 @@ export const MoonlightApp = {
             return;
         }
 
-        let next = cur + 1;
         // On a decode-capability failure, skip every other WebCodecs-based
         // transport (webrtc-dc-*, wss) and jump straight to a native-media one
-        // (<video> RTP decodes via the browser's regular media stack).
-        if (decoderFail) {
-            while (next < chain.length && !chain[next].startsWith('webrtc-media')) next++;
-        }
+        // (<video> RTP decodes via the browser's regular media stack) — which
+        // is a WebRTC one too, so none is left without WebRTC.
+        const next = this._nextRung(chain, cur + 1, decoderFail);
         if (next < chain.length) {
             console.warn(`[MW] Transport ${chain[cur]} failed (${reason}) — trying ${chain[next]}`);
             Toast.warning(
-                t('transport.connectFailed', {
-                    from: this._transportLabel(chain[cur]),
-                    to: this._transportLabel(chain[next]),
-                }),
+                noWebrtc
+                    ? t('transport.webrtcOffNext', { to: this._transportLabel(chain[next]) })
+                    : t('transport.connectFailed', {
+                          from: this._transportLabel(chain[cur]),
+                          to: this._transportLabel(chain[next]),
+                      }),
             );
             this._relaunchTransport(next);
         } else {
             console.error(
                 `[MW] All transports failed (last: ${chain[cur] || '?'}, reason: ${reason})`,
             );
-            Toast.error(t('transport.allFailed'));
+            // Ended by missing WebRTC: the user can act on that (turn WebRTC
+            // on, or ask the admin for WebSocket streaming).
+            Toast.error(
+                t(noWebrtc ? 'transport.noUsable.webrtc_unavailable' : 'transport.allFailed'),
+            );
             // quit() fires onQuit → _onStreamingQuit, which handles navigation
             // back to the apps view. silent: suppress the "Stream end" toast.
             this._endAfterFailedLaunch();
@@ -4131,6 +4195,10 @@ export const MoonlightApp = {
             // The host would not take this stream back after its crash.
             if (reconnectOf && err && err.statusCode === 409 && err.message === 'reconnect_refused')
                 return 'reconnect_refused';
+            // Nothing left this browser can carry: not the host's fault, and
+            // nothing a retry changes (_onTransportFailed ends the launch).
+            const noTransport = noUsableTransportReason(err);
+            if (noTransport !== null) return NO_USABLE_TRANSPORT + ':' + noTransport;
             // The host never gave us a session — a timeout, a 502, a Sunshine
             // refusal. That is a verdict on the HOST, not on this transport, so
             // it must not be charged to the chain (see _onTransportFailed).

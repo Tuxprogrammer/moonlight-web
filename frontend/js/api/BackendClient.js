@@ -85,6 +85,7 @@ import {
 import { currentRefreshMilliHz } from '../util/RefreshRate.js';
 import { canCropFrames } from '../stream/FrameCrop.js';
 import { STREAM_STATE_TIMEOUT_MS } from '../stream/CrashRelaunch.js';
+import { clientCapabilities } from './WebRtcSupport.js';
 
 export class BackendClient {
     /** Cached promise for the per-run admin key (see _adminKey). */
@@ -407,6 +408,9 @@ export class BackendClient {
                 // native host then sends every picture for a moment after a
                 // press. Other hosts ignore it.
                 client_tearing_real: CANVAS_TEARING_IS_REAL,
+                // What this browser can carry: `webrtc: false` and the backend
+                // drops every webrtc-* rung (WebRtcSupport.js).
+                capabilities: clientCapabilities(),
                 ...streamingSettings,
             },
             // Fail fast if the backend hangs/crashes instead of waiting for the
@@ -623,6 +627,8 @@ export class BackendClient {
         // As launchApp's: a guest's browser decodes through a gap too, and a
         // native host then gives their stream the owner's refresh wave.
         body.ride_out_loss = RIDE_OUT_LOSS && decoderRidesOutGaps();
+        // As launchApp's: no WebRTC here, no webrtc-* rung in the guest's chain.
+        body.capabilities = clientCapabilities();
         return this.post('/api/share/player/join', body, { timeoutMs: 25000 });
     }
     static async playerLeave() {

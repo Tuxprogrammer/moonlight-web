@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { probeUdp } from '../js/api/UdpProbe.js';
+import { resetWebrtcProbe } from '../js/api/WebRtcSupport.js';
 
 /** A fake peer connection that emits the given candidates after the offer. */
 function fakePc(candidates, { delayMs = 10, endGathering = false } = {}) {
@@ -18,7 +19,8 @@ function fakePc(candidates, { delayMs = 10, endGathering = false } = {}) {
                 t += delayMs;
                 setTimeout(() => this.onicecandidate?.({ candidate: c }), t);
             }
-            if (endGathering) setTimeout(() => this.onicecandidate?.({ candidate: null }), t + delayMs);
+            if (endGathering)
+                setTimeout(() => this.onicecandidate?.({ candidate: null }), t + delayMs);
         }
         close() {
             this.closed = true;
@@ -26,7 +28,11 @@ function fakePc(candidates, { delayMs = 10, endGathering = false } = {}) {
     };
 }
 
-const host = { type: 'host', protocol: 'udp', candidate: 'candidate:1 1 udp 1 10.0.0.2 5000 typ host' };
+const host = {
+    type: 'host',
+    protocol: 'udp',
+    candidate: 'candidate:1 1 udp 1 10.0.0.2 5000 typ host',
+};
 const srflx = {
     type: 'srflx',
     protocol: 'udp',
@@ -37,6 +43,7 @@ describe('probeUdp', () => {
     afterEach(() => {
         vi.unstubAllGlobals();
         vi.useRealTimers();
+        resetWebrtcProbe();
     });
 
     it('answers true on the first server-reflexive UDP candidate', async () => {
@@ -64,6 +71,29 @@ describe('probeUdp', () => {
 
     it('answers null where the browser has no WebRTC', async () => {
         vi.stubGlobal('RTCPeerConnection', undefined);
+        await expect(probeUdp(1500)).resolves.toBe(null);
+    });
+
+    // The one capability probe (WebRtcSupport.webrtcAvailable) decides: a
+    // browser that keeps the name but refuses to build one cannot ask either.
+    it('answers null where the constructor refuses', async () => {
+        vi.stubGlobal(
+            'RTCPeerConnection',
+            class {
+                constructor() {
+                    throw new DOMException('blocked', 'NotAllowedError');
+                }
+            },
+        );
+        await expect(probeUdp(1500)).resolves.toBe(null);
+    });
+
+    it('answers null when making the offer throws', async () => {
+        const Pc = fakePc([]);
+        Pc.prototype.createDataChannel = () => {
+            throw new Error('no channels here');
+        };
+        vi.stubGlobal('RTCPeerConnection', Pc);
         await expect(probeUdp(1500)).resolves.toBe(null);
     });
 });

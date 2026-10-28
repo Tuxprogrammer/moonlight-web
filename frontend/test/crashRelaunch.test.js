@@ -148,6 +148,8 @@ function linkView(overrides = {}) {
         _reportConnectionFailed: StreamView.prototype._reportConnectionFailed,
         _handOffLinkLoss: StreamView.prototype._handOffLinkLoss,
         _linkLostDefault: StreamView.prototype._linkLostDefault,
+        _armConnectWatchdog: StreamView.prototype._armConnectWatchdog,
+        _clearConnectWatchdog: StreamView.prototype._clearConnectWatchdog,
         ...overrides,
     };
     StreamView.prototype.setupWebRtc.call(sv);

@@ -929,7 +929,15 @@
         "allFailed": "连接失败——所有传输模式均失败",
         "identityRefused": "该主机无法证明其身份，因此未启动串流。如果该主机上重新安装了 MoonlightWeb，请使用 PIN 重新配对此浏览器。",
         "launchFailed": "主机未启动串流——请稍后重试",
-        "launchFailedNext": "主机未通过 {{from}} 启动串流——正在尝试 {{to}}…"
+        "launchFailedNext": "主机未通过 {{from}} 启动串流——正在尝试 {{to}}…",
+        "webrtcOffNext": "此浏览器已关闭 WebRTC——正在尝试 {{to}}…",
+        "noUsable": {
+            "webrtc_unavailable": "此浏览器已关闭 WebRTC，而此服务器不提供 WebSocket 串流。请在浏览器中开启 WebRTC，或请服务器管理员允许 WebSocket 串流。",
+            "policy": "服务器的传输策略不允许此浏览器可用的任何连接方式。请向服务器管理员询问允许哪些传输方式。",
+            "tunnel": "通过远程访问链接无法使用 WebSocket 串流，而此浏览器已关闭 WebRTC。请开启 WebRTC，或直接连接到服务器。",
+            "udp_blocked": "此网络屏蔽了 UDP，而服务器不提供此浏览器可用的 TCP 连接。",
+            "generic": "服务器不提供此浏览器可用的任何连接方式，因此未启动串流。"
+        }
     },
     "launch": {
         "launching": "正在启动 {{name}}…",

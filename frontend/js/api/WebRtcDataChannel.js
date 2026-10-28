@@ -29,6 +29,7 @@ import {
     isBindRefusedClose,
 } from '../util/pairingCrypto.js';
 import { defaultIceServers } from './IceServers.js';
+import { WEBRTC_UNAVAILABLE, webrtcAvailable } from './WebRtcSupport.js';
 import { isViewMessage } from './hostMessages.js';
 import { attachFloodCounter, floodMode } from './FloodCounter.js';
 import { attachUltraSink, ultraSinkMode } from './UltraSink.js';
@@ -205,6 +206,14 @@ export class WebRtcDataChannel {
         this._wsHadOpen = false; // set true once onopen fires
         this._wsHadError = false; // set true once onerror fires
 
+        // WSS: a socket that closes before it ever opened is tried once more
+        // after WSS_RETRY_DELAY_MS. A relaunch can reach /ws/stream while the
+        // previous worker is still going away, and the host then answers
+        // "retry in a second" (503, Retry-After: 1) rather than a stream.
+        this._wssRetried = false;
+        this._wssRetryTimer = null;
+        this.WSS_RETRY_DELAY_MS = 1000;
+
         // WS fallback mode: when ICE times out (UDP blocked), the backend
         // sends video/audio data over the existing signaling WebSocket as
         // binary frames. Text frames carry input commands the other way.
@@ -344,6 +353,24 @@ export class WebRtcDataChannel {
     connect() {
         if (this._stopping) return;
 
+        if (this._wssMode) {
+            this._openWss();
+            return;
+        }
+
+        // No WebRTC in this browser: there is no peer connection to negotiate,
+        // so the signalling socket is not even opened. Said at once, and with
+        // the one reason the chain reads as "skip every webrtc-* rung".
+        if (!webrtcAvailable()) {
+            console.error('[WebRTC] This browser has no WebRTC — this transport cannot run');
+            // Deferred: connect() runs from the view's constructor, before its
+            // owner has wired the callbacks that walk the chain.
+            setTimeout(() => {
+                if (!this._stopping) this._onError(WEBRTC_UNAVAILABLE);
+            }, 0);
+            return;
+        }
+
         console.log('[WebRTC] Connecting to signaling:', this.signalingUrl);
         // Through the rendezvous this is a socket carried on the control
         // channel; on a direct connection it is a plain WebSocket. Only the
@@ -351,161 +378,219 @@ export class WebRtcDataChannel {
         // connection either way, negotiated over whichever this is.
         this.signalingWs = openSignalingSocket(this.signalingUrl);
 
-        if (this._wssMode) {
-            // ── WSS mode: direct WebSocket binary passthrough ────────────────
-            this.signalingWs.binaryType = 'arraybuffer';
+        // ── Normal WebRTC mode: wait for SDP offer ──────────────────────────
+        this.signalingWs.onopen = () => {
+            this._wsHadOpen = true;
+            console.log('[WebRTC] Signaling WS connected, waiting for ICE config...');
+            // MW-BIND-v1: announce our key and nonce. The host holds its SDP
+            // offer until this arrives, since its signature covers the nonce.
+            // Not for a share-link guest: never paired, it is sent an
+            // unsigned offer, which a key this browser holds from pairing
+            // with the same host as its owner would refuse (S9.2, 11/10).
+            if (this._unpairedGuest) return;
+            beginHandshake().then((identity) => {
+                this._mwBind = identity;
+                if (identity) this._sendSignaling(helloMessage(identity));
+            });
+        };
 
-            this.signalingWs.onopen = () => {
-                this._wsHadOpen = true;
-                console.log('[WSS] WS connected, stream ready');
-                this.connected = true;
-                if (this.onOpen) this.onOpen();
-            };
+        this.signalingWs.onmessage = (evt) => {
+            if (this._stopping) return;
+            try {
+                const msg = JSON.parse(evt.data);
+                this._handleSignalingMessage(msg);
+            } catch (e) {
+                console.warn('[WebRTC] Invalid signaling message:', e.message);
+            }
+        };
 
-            this.signalingWs.onmessage = (evt) => this._onWssMessage(evt);
-
-            this.signalingWs.onerror = (err) => {
-                console.error(
-                    '[WSS] WS onerror' + (this._wsHadOpen ? ' (after open)' : ' (BEFORE open)'),
-                );
-                this._wsHadError = true;
-                if (!this._stopping) {
-                    if (!this._wsHadOpen) {
-                        this._onError(
-                            'Connexion au serveur de streaming impossible. ' +
-                                'Verifiez votre pare-feu, antivirus (HTTPS Scanning), ' +
-                                'ou proxy.',
-                        );
-                    } else {
-                        this._onError('Erreur de connexion au serveur de streaming');
-                    }
-                }
-            };
-
-            this.signalingWs.onclose = (evt) => {
-                const desc = wsCloseDescription(evt.code);
-                console.log(
-                    '[WSS] WS closed: ' +
-                        desc +
-                        ' (code=' +
-                        evt.code +
-                        ')' +
-                        (evt.reason ? ', reason=' + evt.reason : ''),
-                );
-                if (!this._stopping && !this._wsHadError) {
-                    // onerror may have already triggered — only act if it didn't.
-                    if (evt.code === 1015) {
-                        this._onError(
-                            'Erreur de securite TLS. ' + "Verifiez la date et l'heure du systeme.",
-                        );
-                    } else if (this.connected) {
-                        this._onError('Connexion au serveur de streaming interrompue');
-                    } else {
-                        this._onError(
-                            'Connexion au serveur de streaming impossible. ' +
-                                'Verifiez votre pare-feu, antivirus (HTTPS Scanning), ' +
-                                'ou proxy.',
-                        );
-                    }
-                }
-            };
-        } else {
-            // ── Normal WebRTC mode: wait for SDP offer ──────────────────────────
-            this.signalingWs.onopen = () => {
-                this._wsHadOpen = true;
-                console.log('[WebRTC] Signaling WS connected, waiting for ICE config...');
-                // MW-BIND-v1: announce our key and nonce. The host holds its SDP
-                // offer until this arrives, since its signature covers the nonce.
-                // Not for a share-link guest: never paired, it is sent an
-                // unsigned offer, which a key this browser holds from pairing
-                // with the same host as its owner would refuse (S9.2, 11/10).
-                if (this._unpairedGuest) return;
-                beginHandshake().then((identity) => {
-                    this._mwBind = identity;
-                    if (identity) this._sendSignaling(helloMessage(identity));
-                });
-            };
-
-            this.signalingWs.onmessage = (evt) => {
-                if (this._stopping) return;
-                try {
-                    const msg = JSON.parse(evt.data);
-                    this._handleSignalingMessage(msg);
-                } catch (e) {
-                    console.warn('[WebRTC] Invalid signaling message:', e.message);
-                }
-            };
-
-            this.signalingWs.onerror = (err) => {
-                console.error(
-                    '[WebRTC] Signaling WS onerror' +
-                        (this._wsHadOpen ? ' (after open)' : ' (BEFORE open)'),
-                );
-                this._wsHadError = true;
-                if (!this._stopping) {
-                    // onerror fires before onclose but carries no close code.
-                    // Let onclose handle the user-facing error (it has the code).
-                    // Only trigger now if we were already connected (runtime error).
-                    if (this._wsHadOpen) {
-                        this._onError('Erreur de connexion au serveur de streaming');
-                    }
-                }
-            };
-
-            this.signalingWs.onclose = (evt) => {
-                const desc = wsCloseDescription(evt.code);
-                console.log(
-                    '[WebRTC] Signaling WS closed: ' +
-                        desc +
-                        ' (code=' +
-                        evt.code +
-                        ')' +
-                        (evt.reason ? ', reason=' + evt.reason : ''),
-                );
-                this._wsHadError = false; // Reset so onclose can trigger its own error
-
-                // If already connected (DCs open) or stopping, WS close is expected
-                if (this.connected || this._stopping) return;
-
-                if (this._iceConnected) {
-                    console.log(
-                        '[WebRTC] WS closed after ICE connected — waiting ' +
-                            this.WS_GRACE_PERIOD_MS / 1000 +
-                            's for DataChannels...',
-                    );
-                    this._wsCloseTimer = setTimeout(() => {
-                        if (!this.connected && !this._stopping) {
-                            this._onError('Timed out waiting for DataChannels after WS closed');
-                        }
-                    }, this.WS_GRACE_PERIOD_MS);
-                } else {
-                    // Close code tells us what went wrong
-                    if (isBindRefusedClose(evt)) {
-                        // The host refused our key: final, like a refusal of its
-                        // own signature here (see IDENTITY_REFUSED).
-                        this._onError(IDENTITY_REFUSED);
-                    } else if (evt.code === 1015) {
-                        this._onError(
-                            'Erreur de securite TLS. ' + "Verifiez la date et l'heure du systeme.",
-                        );
-                    } else if (evt.code === 1006 || !this._wsHadOpen) {
-                        this._onError(
-                            'Connexion au serveur de streaming impossible. ' +
-                                'Verifiez votre pare-feu, antivirus (HTTPS Scanning), ' +
-                                'ou proxy.',
-                        );
-                    } else {
-                        this._onError('Connexion au serveur de streaming interrompue');
-                    }
-                }
-            };
-
-            // Start cleanup timer (for chunk reassembly in WebRTC mode)
-            this._cleanupTimer = setInterval(
-                () => this._cleanupStaleFrames(),
-                this.CLEANUP_INTERVAL_MS,
+        this.signalingWs.onerror = (err) => {
+            console.error(
+                '[WebRTC] Signaling WS onerror' +
+                    (this._wsHadOpen ? ' (after open)' : ' (BEFORE open)'),
             );
+            this._wsHadError = true;
+            if (!this._stopping) {
+                // onerror fires before onclose but carries no close code.
+                // Let onclose handle the user-facing error (it has the code).
+                // Only trigger now if we were already connected (runtime error).
+                if (this._wsHadOpen) {
+                    this._onError('Erreur de connexion au serveur de streaming');
+                }
+            }
+        };
+
+        this.signalingWs.onclose = (evt) => {
+            const desc = wsCloseDescription(evt.code);
+            console.log(
+                '[WebRTC] Signaling WS closed: ' +
+                    desc +
+                    ' (code=' +
+                    evt.code +
+                    ')' +
+                    (evt.reason ? ', reason=' + evt.reason : ''),
+            );
+            this._wsHadError = false; // Reset so onclose can trigger its own error
+
+            // If already connected (DCs open) or stopping, WS close is expected
+            if (this.connected || this._stopping) return;
+
+            if (this._iceConnected) {
+                console.log(
+                    '[WebRTC] WS closed after ICE connected — waiting ' +
+                        this.WS_GRACE_PERIOD_MS / 1000 +
+                        's for DataChannels...',
+                );
+                this._wsCloseTimer = setTimeout(() => {
+                    if (!this.connected && !this._stopping) {
+                        this._onError('Timed out waiting for DataChannels after WS closed');
+                    }
+                }, this.WS_GRACE_PERIOD_MS);
+            } else {
+                // Close code tells us what went wrong
+                if (isBindRefusedClose(evt)) {
+                    // The host refused our key: final, like a refusal of its
+                    // own signature here (see IDENTITY_REFUSED).
+                    this._onError(IDENTITY_REFUSED);
+                } else if (evt.code === 1015) {
+                    this._onError(
+                        'Erreur de securite TLS. ' + "Verifiez la date et l'heure du systeme.",
+                    );
+                } else if (evt.code === 1006 || !this._wsHadOpen) {
+                    this._onError(
+                        'Connexion au serveur de streaming impossible. ' +
+                            'Verifiez votre pare-feu, antivirus (HTTPS Scanning), ' +
+                            'ou proxy.',
+                    );
+                } else {
+                    this._onError('Connexion au serveur de streaming interrompue');
+                }
+            }
+        };
+
+        // Start cleanup timer (for chunk reassembly in WebRTC mode)
+        this._cleanupTimer = setInterval(
+            () => this._cleanupStaleFrames(),
+            this.CLEANUP_INTERVAL_MS,
+        );
+    }
+
+    /**
+     * WSS mode: the WebSocket is the whole transport, video and audio in
+     * binary frames, input as JSON text, no PeerConnection.
+     */
+    _openWss() {
+        console.log('[WSS] Connecting:', this.signalingUrl);
+        const ws = openSignalingSocket(this.signalingUrl);
+        this.signalingWs = ws;
+        ws.binaryType = 'arraybuffer';
+        // Whether this socket's failure before open was already handled: the
+        // browser sends an error and then a close for the same failure.
+        let failedBeforeOpen = false;
+        const current = () => ws === this.signalingWs && !this._stopping;
+
+        ws.onopen = () => {
+            if (!current()) return;
+            this._wsHadOpen = true;
+            console.log('[WSS] WS connected, stream ready');
+            this.connected = true;
+            if (this.onOpen) this.onOpen();
+        };
+
+        ws.onmessage = (evt) => {
+            if (current()) this._onWssMessage(evt);
+        };
+
+        ws.onerror = () => {
+            console.error(
+                '[WSS] WS onerror' + (this._wsHadOpen ? ' (after open)' : ' (BEFORE open)'),
+            );
+            if (!current()) return;
+            if (this._wsHadOpen) {
+                this._wsHadError = true;
+                this._onError('Erreur de connexion au serveur de streaming');
+                return;
+            }
+            // No close code on an error: the close that follows may carry
+            // one, but a socket that never sends it must not hang the rung.
+            if (!failedBeforeOpen) {
+                failedBeforeOpen = true;
+                this._wssFailedBeforeOpen(0);
+            }
+        };
+
+        ws.onclose = (evt) => {
+            const desc = wsCloseDescription(evt.code);
+            console.log(
+                '[WSS] WS closed: ' +
+                    desc +
+                    ' (code=' +
+                    evt.code +
+                    ')' +
+                    (evt.reason ? ', reason=' + evt.reason : ''),
+            );
+            if (!current() || this._wsHadError) return;
+            if (this.connected) {
+                this._onError('Connexion au serveur de streaming interrompue');
+                return;
+            }
+            if (!failedBeforeOpen) {
+                failedBeforeOpen = true;
+                this._wssFailedBeforeOpen(evt.code);
+            }
+        };
+    }
+
+    /**
+     * The WSS socket went before it ever opened. Once per transport it is
+     * opened again a moment later: during a relaunch the host can still be
+     * tearing the previous worker down. A TLS failure is not retried — the
+     * clock or a scanner is to blame, and a second try changes neither.
+     * @param {number} code the close code, 0 when only an error was seen
+     */
+    _wssFailedBeforeOpen(code) {
+        if (this._stopping) return;
+        if (code === 1015) {
+            this._onError('Erreur de securite TLS. ' + "Verifiez la date et l'heure du systeme.");
+            return;
         }
+        if (!this._wssRetried) {
+            this._wssRetried = true;
+            console.warn(
+                '[WSS] Closed before opening — trying once more in ' +
+                    this.WSS_RETRY_DELAY_MS +
+                    ' ms',
+            );
+            this._detachSignalingWs();
+            this._wssRetryTimer = setTimeout(() => {
+                this._wssRetryTimer = null;
+                if (!this._stopping) this._openWss();
+            }, this.WSS_RETRY_DELAY_MS);
+            return;
+        }
+        this._onError(
+            'Connexion au serveur de streaming impossible. ' +
+                'Verifiez votre pare-feu, antivirus (HTTPS Scanning), ' +
+                'ou proxy.',
+        );
+    }
+
+    /** Drop the signalling socket's handlers and close it, if still open. */
+    _detachSignalingWs() {
+        const ws = this.signalingWs;
+        if (!ws) return;
+        ws.onopen = null;
+        ws.onmessage = null;
+        ws.onerror = null;
+        ws.onclose = null;
+        if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
+            try {
+                ws.close();
+            } catch (e) {
+                /* ignore */
+            }
+        }
+        this.signalingWs = null;
     }
 
     /**
@@ -530,14 +615,10 @@ export class WebRtcDataChannel {
         if (this.dataChannels.input && this.dataChannels.input.readyState === 'open') {
             this.dataChannels.input.send(JSON.stringify(obj));
         } else {
-            // Input DC not ready — try signaling WS as fallback (handles the
-            // race window during ICE→WS fallback transition where _wsFallback
-            // hasn't been set yet but the signaling WS is still open).
-            if (this.signalingWs && this.signalingWs.readyState === WebSocket.OPEN) {
-                this.signalingWs.send(JSON.stringify(obj));
-                return;
-            }
-            // No transport available — silently drop
+            // Input DC not ready: dropped. Never onto the signalling socket,
+            // which speaks only SDP and ICE — input sent there reached the
+            // host as "Unknown message type" while the page waited on a peer
+            // connection that would never come (no WebRTC in the browser).
             if (this._logCount < 5) {
                 console.warn('[WebRTC] Input DC not open, dropping message:', obj.type);
                 this._logCount++;
@@ -666,6 +747,11 @@ export class WebRtcDataChannel {
         if (this._audioRetryCleanup) {
             this._audioRetryCleanup();
             this._audioRetryCleanup = null;
+        }
+
+        if (this._wssRetryTimer) {
+            clearTimeout(this._wssRetryTimer);
+            this._wssRetryTimer = null;
         }
 
         if (this._wssMode) {
@@ -836,6 +922,7 @@ export class WebRtcDataChannel {
             this.onVideo(frame, isKeyframe, backendTs, frameId);
     }
 
+    /** @returns {boolean} false when no peer connection could be made (reported) */
     _createPeerConnection() {
         console.log('[WebRTC] Creating RTCPeerConnection');
 
@@ -854,7 +941,18 @@ export class WebRtcDataChannel {
         if (rtpLegacyApi()) config.encodedInsertableStreams = true;
         console.log('[WebRTC] ICE servers:', JSON.stringify(iceServers));
 
-        this.pc = new RTCPeerConnection(config);
+        // The constructor is missing where the browser turned WebRTC off, and
+        // throws where a policy forbids it. Either way the rung is over, with
+        // the reason that tells the chain to skip every other webrtc-* rung —
+        // thrown into the signalling handler, it was swallowed there.
+        try {
+            this.pc = new RTCPeerConnection(config);
+        } catch (e) {
+            console.error('[WebRTC] Cannot create a peer connection:', e && e.message);
+            this.pc = null;
+            this._onError(WEBRTC_UNAVAILABLE);
+            return false;
+        }
 
         // --- Native RTP audio track (Opus, browser-decoded) ---
         // The backend offers a send-only Opus track; the browser handles jitter
@@ -999,6 +1097,7 @@ export class WebRtcDataChannel {
         // Wait for the SDP offer from the backend (via signaling WS).
         // When we receive it, we'll call _handleSdpOffer().
         console.log('[WebRTC] PC created, waiting for SDP offer...');
+        return true;
     }
 
     _createDataChannels() {
@@ -1220,15 +1319,18 @@ export class WebRtcDataChannel {
             console.warn('[MW-BIND] No stored host identity — cannot verify this offer');
         }
 
-        // Safety net: if ice-config never arrived, create PC now.
-        // This can happen if the backend sends the SDP offer before the
-        // ice-config message is processed (rare race on slow connections).
-        if (!this.pc) {
-            console.log('[WebRTC] Creating PC in SDP handler (ice-config not received)');
-            this._createPeerConnection();
-        }
-
         try {
+            // Safety net: if ice-config never arrived, create PC now.
+            // This can happen if the backend sends the SDP offer before the
+            // ice-config message is processed (rare race on slow connections).
+            // Inside the try: anything it throws ends the rung, never a
+            // rejection nobody hears.
+            // Closed meanwhile (an error, Stop): nothing left to answer with.
+            if (this._stopping) return;
+            if (!this.pc) {
+                console.log('[WebRTC] Creating PC in SDP handler (ice-config not received)');
+                if (!this._createPeerConnection()) return;
+            }
             const remoteDesc = new RTCSessionDescription({
                 type: 'offer',
                 sdp: sdp,

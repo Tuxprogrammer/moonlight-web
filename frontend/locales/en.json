@@ -929,7 +929,15 @@
         "allFailed": "Connection failed — all transport modes failed",
         "identityRefused": "This host could not prove its identity, so the stream was not started. If MoonlightWeb was reinstalled on it, pair this browser again with a PIN.",
         "launchFailed": "The host did not start the stream — try again in a moment",
-        "launchFailedNext": "The host did not start the stream on {{from}} — trying {{to}}…"
+        "launchFailedNext": "The host did not start the stream on {{from}} — trying {{to}}…",
+        "webrtcOffNext": "WebRTC is turned off in this browser — trying {{to}}…",
+        "noUsable": {
+            "webrtc_unavailable": "This browser has WebRTC turned off, and this server doesn't offer WebSocket streaming. Turn WebRTC on in the browser, or ask the server's administrator to allow WebSocket streaming.",
+            "policy": "The server's transport policy allows no connection this browser can use. Ask the server's administrator which transports are allowed.",
+            "tunnel": "WebSocket streaming is not available through the remote-access link, and this browser has WebRTC turned off. Turn WebRTC on, or connect to the server directly.",
+            "udp_blocked": "This network blocks UDP and the server offers no connection over TCP that this browser can use.",
+            "generic": "The server offers no connection this browser can use, so the stream was not started."
+        }
     },
     "launch": {
         "launching": "Launching {{name}}...",
