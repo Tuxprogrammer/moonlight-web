@@ -91,6 +91,42 @@ void run_app_settings_tests()
     s.setTransportMode("webrtc-dc-udp");
     CHECK_EQ(s.transportMode(), QString("webrtc-dc-udp"));
 
+    // Allowed transports (admin policy): "all" until set; the three names in
+    // any case, nothing else. A refused value leaves the stored one, and a file
+    // edited to something else reads as "all" rather than as a policy that
+    // does not exist.
+    CHECK_EQ(s.allowedTransports(), QString("all"));
+    CHECK(s.setAllowedTransports("wss"));
+    CHECK_EQ(s.allowedTransports(), QString("wss"));
+    CHECK(s.setAllowedTransports(" WebRTC "));
+    CHECK_EQ(s.allowedTransports(), QString("webrtc"));
+    CHECK(!s.setAllowedTransports("websocket"));
+    CHECK(!s.setAllowedTransports(""));
+    CHECK(!s.setAllowedTransports("auto"));
+    CHECK_EQ(s.allowedTransports(), QString("webrtc"));
+    {
+        AppSettings again; // persisted, not cached
+        again.m_FilePath = s.m_FilePath;
+        CHECK_EQ(again.allowedTransports(), QString("webrtc"));
+        QFile f(s.m_FilePath);
+        CHECK(f.open(QIODevice::ReadOnly));
+        QJsonObject edited = QJsonDocument::fromJson(f.readAll()).object();
+        f.close();
+        CHECK_EQ(edited.value("allowed_transports").toString(), QString("webrtc"));
+        edited["allowed_transports"] = "udp-only";
+        CHECK(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(QJsonDocument(edited).toJson());
+        f.close();
+        CHECK_EQ(s.allowedTransports(), QString("all"));
+        edited["allowed_transports"] = 3; // not even a string
+        CHECK(f.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        f.write(QJsonDocument(edited).toJson());
+        f.close();
+        CHECK_EQ(s.allowedTransports(), QString("all"));
+    }
+    CHECK(s.setAllowedTransports("all"));
+    CHECK_EQ(s.allowedTransports(), QString("all"));
+
     // The picture chain of a native session (admin → Advanced): auto until
     // the admin picks one — Windows' names and Linux's, in any case, nothing
     // else. A refused value leaves the stored one in place, and a file edited

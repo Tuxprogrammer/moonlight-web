@@ -42,6 +42,7 @@ export default defineConfig({
                 'js/util/audioAutoplay.js',
                 'js/util/homeScreenKeys.js',
                 'js/ui/ClipboardPanel.js',
+                'js/util/TransportChoice.js',
                 'js/stream/JitterController.js',
                 'js/stream/PeriodicStallDetector.js',
                 'js/stream/PipelineDiag.js',

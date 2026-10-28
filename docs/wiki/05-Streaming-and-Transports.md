@@ -16,7 +16,7 @@ The same Sunshine-side stream (RTSP/RTP/ENet handled by `moonlight-common-c`) ca
 | `webrtc-dc-tcp` | `DataChannelRelay` | same, ICE-TCP candidates | canvas | H.264/HEVC/AV1 | UDP-hostile networks |
 | `webrtc-media-udp` | `MediaTrackRelay` | RTP video+audio tracks, input DataChannel | `<video>` (browser decoder) | **H.264 only** | Browser-managed jitter/FEC/PLC; true-HDR-capable sink |
 | `webrtc-media-tcp` | `MediaTrackRelay` | same, ICE-TCP | `<video>` | H.264 only | |
-| `wss` | `StreamRelay` | one WebSocket (TLS), video+audio+input multiplexed | canvas | H.264/HEVC/AV1 | **LAN IP only, not user-selectable.** Rides the TLS connection that served the page, so it exists only for a browser opened directly on the host's LAN address; worst latency profile |
+| `wss` | `StreamRelay` | one WebSocket (TLS), video+audio+input multiplexed | canvas | H.264/HEVC/AV1 | **LAN IP only.** Rides the TLS connection that served the page, so it exists only for a browser opened directly on the host's LAN address (or a domain of the admin's own); worst latency profile. Chosen on purpose through the [policy and the browser's choice](#transport-policy-and-the-browsers-choice) |
 
 The two WebRTC families differ only in the **video** path: `-dc` fragments access units over SCTP for WebCodecs, `-media` sends a real RTP video track. Audio is an RTP Opus track in both; input is always the `input` DataChannel. `-udp` vs `-tcp` changes nothing but the ICE candidate types (`enableIceTcp`).
 
@@ -29,11 +29,22 @@ The two WebRTC families differ only in the **video** path: `-dc` fragments acces
 
 `wss` is dropped from the chain for any browser that arrived through the rendezvous (`req.viaTunnel`) — there is no page-serving TLS connection to carry it. Since that is how every user reaches the app, the rung is effectively LAN-IP-only, and the admin selector omits it outside debug builds (`available_transports`). Selecting it by name is still honoured, and still reported: the `/start` response carries `transport_dropped` and the browser shows which transport actually runs. Since 0.4.1 the `-tcp` rungs cover most of the UDP-blocked case that `wss` used to, through passive ICE-TCP: see [Networks that let no UDP out](#networks-that-let-no-udp-out).
 
-Rules applied when building the chain (`main.cpp`):
+Rules applied when building the chain (`streaming/TransportChain.h`, one pure function for the owner's `/start` and a player's join, tested in every combination by `tests/test_transport_chain.cpp`):
 
 - HEVC/AV1 requests **skip webrtc-media** (H.264-only) — or, if a media mode is explicitly forced, the codec is overridden to H.264 and the response flags `codecOverridden` + `originalCodec`.
 - Host codec support is checked against the canonical `SCM_MASK_*` values from `Limelight.h` (the GFE-era literals are wrong for Sunshine).
-- A forced `-udp` mode promotes its `-tcp` sibling to second place (same family before switching).
+- A forced `-udp` mode promotes its `-tcp` sibling to second place (same family before switching). A `transport_mode` that names no transport reads as `auto`.
+- A browser without WebRTC says so in the start body, `capabilities: { webrtc: false }` (a guest's join too): every `webrtc-*` rung leaves the chain, so it never waits on a rung it cannot run. Absent, the browser is assumed to have it.
+- A chain left empty before any attempt — today a browser without WebRTC that came through the rendezvous, where `wss` cannot run — answers **409** `{error: "no_usable_transport", reason}`, `reason` ∈ `webrtc_unavailable` \| `policy` \| `tunnel` \| `udp_blocked` (the last is reserved: blocked UDP never removes the last rung). The page explains instead of relaunching. A `transport_index` past the end of a non-empty chain is still `502 All transport modes failed`.
+
+### Transport policy and the browser's choice
+
+Two settings narrow the chain; neither reorders it.
+
+- **The admin's policy**, `allowed_transports` ([Settings](07-Settings-Reference.md)): `all` (the default, everything above), `webrtc` (no `wss`, even named, even on the LAN) or `wss` (**WebSocket only**: no WebRTC rung at all). It applies to the owner and to guests. `transport_mode` keeps its meaning as the *order* inside what the policy allows: a saved mode the policy forbids reads as `auto`, and a request's `transport_mode` (power saving's MediaTrack, the codec fallback's proven rung) is ignored when the policy forbids it — a browser cannot lift the admin's choice. Set from the admin page, `--allowed-transports`, or `MW_ALLOWED_TRANSPORTS`.
+- **The browser's preference**, `transport_pref` in the start body (Settings → *Connection*: Automatic, WebRTC, WebSocket): filters inside the policy. The page offers only what `/api/internet/status` allows (`allowed_transports`), no WebRTC when it has none, and no WebSocket through the rendezvous.
+
+`wss` keeps every limit it had: it rides the TLS connection that served the page, so "WebSocket only" is a setting for browsers that open the host directly — its LAN IP, or a domain of the admin's own. Through the rendezvous it leaves the chain as before, and under `wss` that leaves nothing: the start answers `409 no_usable_transport` with `reason: "tunnel"` (`"policy"` when the browser's preference is outside the policy, `"webrtc_unavailable"` when only WebRTC is left and the browser has none).
 
 **The browser owns the loop**: the `/start` response is sent *before* ICE connects, so only the client can observe a connection failure. The full `transport_chain` and current `transport_index` are echoed in the response; on failure the frontend relaunches with `transport_index + 1`. Manual transport selection precedes automatic fallback.
 
@@ -66,7 +77,7 @@ The project runs no relay (no TURN), so that is the expected outcome, not a faul
 1. **Forward a TCP port by hand on the router**, external 443 → the host's `https_port` (443, or the port it fell back to). UPnP maps media and tunnel ports, never a web port. The public IP is shown under Admin › Internet, on the host machine itself only: it is redacted for any request that is not local, the tunnel's included.
 2. **Accept the certificate warning.** The host serves its self-signed certificate under an address it has no name for. Accepting it trusts whatever answers on that address; the PIN, not the certificate, is what admits.
 3. **Pair again.** The direct address is another origin from the entry link: no session, no pairing key carried over. The owner enters a PIN from the admin page. An invited player opens `https://<public IP>/p/<token>` — the token is what follows `#t=` in the shared link, which the interface does not print in this form — and enters the invitation's PIN.
-4. **Wait for the chain.** The browser's STUN probe (`api/UdpProbe.js`) finds no UDP and the start request says `udp_blocked`. For a browser planned for the internet, `dropUdpRungsWhenBlocked` (`main.cpp`) then removes the `-udp` rungs, and only those: the one or two `-tcp` rungs still run to their ICE deadline (8 s each in the 22/10 bench) before `wss` takes over. The first frame can take about twenty seconds. A player's chain ignores the owner's forced transport.
+4. **Wait for the chain.** The browser's STUN probe (`api/UdpProbe.js`) finds no UDP and the start request says `udp_blocked`. For a browser planned for the internet, `TransportChain` then removes the `-udp` rungs, and only those: the one or two `-tcp` rungs still run to their ICE deadline (8 s each in the 22/10 bench) before `wss` takes over. The first frame can take about twenty seconds. A player's chain ignores the owner's forced transport.
 
 What it costs: the link carries the home's public address in clear, and a dynamic IP breaks it at the next change. `wss` is also the worst latency profile of the five, with TCP head-of-line blocking under loss. Putting `wss` back under the entry link would need a valid certificate for that address, so a name per user, which the project does not issue ([Security §6.5](06-Security.md#65-tls)).
 

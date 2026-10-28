@@ -722,6 +722,15 @@ public:
     QString transportMode() const;
     void setTransportMode(const QString& mode);
 
+    /// Which transport families a stream may use (the admin's policy):
+    /// "all" | "webrtc" | "wss". The chain is filtered by it; transportMode()
+    /// only orders what it leaves (TransportChain.h).
+    /// Default: "all", which is also what a value that is none of the three reads as.
+    QString allowedTransports() const;
+    /// Stores one of the three names, in any case. False, with the file left
+    /// as it was, for anything else.
+    bool setAllowedTransports(const QString& policy);
+
     /// The chain a native Windows session carries its pictures on, from the
     /// capture to the encoder (plan pipeline-video-d3d12-v2, §3.3): "auto" —
     /// the engine's table, measured GPU by GPU — "d3d11" or "d3d12". The
