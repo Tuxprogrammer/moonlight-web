@@ -300,6 +300,7 @@ docker run --rm -v mw-data:/data -v "$PWD:/backup" debian:trixie-slim \
 | `MW_HTTPS_PORT` | `443` | HTTPS listener. Written into `settings.json` on every start, so it survives the fallback the server applies when a port is taken. |
 | `MW_HTTP_PORT` | `80` | HTTP listener (HTTP-to-HTTPS redirect). |
 | `MW_UPNP` | `1` | `0` stops the app asking the router to map ports — set it on a bridge network, where the request cannot reach a router anyway. |
+| `MW_TRUSTED_PROXIES` | unset | The reverse proxies in front of the container (addresses or CIDRs, commas or spaces) whose `X-Forwarded-For` is believed, so each client behind them gets its own rate limit, ban and line in the sessions list. It grants no access. Written into `settings.json` on every start, and wins over it while set. See [Security §6.4a](../docs/wiki/06-Security.md#64a-behind-a-reverse-proxy-trusted_proxies). |
 | `TZ` | `Etc/UTC` | Timestamps in the logs and the admin UI. |
 | `MW_DOMAIN`, `MW_PDNS_TOKEN` | baked in | The rendezvous domain and the shared API key for the update relay and aggregate metrics. The official images carry the project's, exactly like the `.deb`; without them the container never contacts our infrastructure. |
 

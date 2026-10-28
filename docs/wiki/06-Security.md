@@ -8,7 +8,7 @@ MoonlightWeb exposes a streaming server to the LAN and, optionally, to the publi
 
 ## 6.1 Threat model in one paragraph
 
-An instance opened to the Internet publishes no name, takes no certificate in its own name and opens no web port; what it exposes is a **held outbound line** and the router ports it maps for its tunnel and its stream slots. So there is no address to scan and no hostname in Certificate Transparency: a stranger's way in is to arrive at a known entry identifier and then get past the PIN. Attackers can: guess an identifier (128 bits, quota-bounded — [Infrastructure §10.12](10-Infrastructure-Stack.md#1012-hardening--limits)), scan/guess the PIN, flood connections, or replay stolen artifacts. Trusted parties: the local machine (localhost is admin, except under `--noadmin`), LAN clients (exempt from bans, still need a PIN when remote-auth applies). The introduction server is **partially** trusted — it knows which identifiers are online and sees residential addresses on its sockets, and it is deliberately kept out of the signalling's meaning by [§6.6](#66-the-entry-identifier-and-mw-bind-v1). Out of scope: volumetric DDoS, a compromised host OS.
+An instance opened to the Internet publishes no name, takes no certificate in its own name and opens no web port; what it exposes is a **held outbound line** and the router ports it maps for its tunnel and its stream slots. So there is no address to scan and no hostname in Certificate Transparency: a stranger's way in is to arrive at a known entry identifier and then get past the PIN. Attackers can: guess an identifier (128 bits, quota-bounded — [Infrastructure §10.12](10-Infrastructure-Stack.md#1012-hardening--limits)), scan/guess the PIN, flood connections, or replay stolen artifacts. Trusted parties: the local machine (localhost is admin, except under `--noadmin`), LAN clients (exempt from bans, still need a PIN when remote-auth applies), and the reverse proxies the owner lists in `trusted_proxies`, which are believed about *who* their clients are and about nothing else ([§6.4a](#64a-behind-a-reverse-proxy-trusted_proxies)). The introduction server is **partially** trusted — it knows which identifiers are online and sees residential addresses on its sockets, and it is deliberately kept out of the signalling's meaning by [§6.6](#66-the-entry-identifier-and-mw-bind-v1). Out of scope: volumetric DDoS, a compromised host OS.
 
 ## 6.2 Authentication
 
@@ -79,6 +79,41 @@ Two cooperating layers:
    - Auth-failure flood: > 10 rejected (401) requests / 60 s / IP.
    - Both arm a **10-minute temporary ban**; entries idle 5 min are purged.
    - **Loopback and private addresses (RFC 1918 / ULA / link-local) are fully exempt** — LAN clients are trusted.
+   - Behind a reverse proxy listed in `trusted_proxies`, both layers count the client the proxy forwards, not the proxy: see [§6.4a](#64a-behind-a-reverse-proxy-trusted_proxies).
+
+## 6.4a Behind a reverse proxy (`trusted_proxies`)
+
+Behind a reverse proxy every request reaches MoonlightWeb from the proxy's address. Left alone, that makes all its users one caller: one PIN bucket that a single guesser locks for everybody, one ConnectionGuard entry (fully exempt when the proxy sits on the LAN, banned for everyone when it does not), one address and one location for every row of the sessions list. `trusted_proxies` ([Settings](07-Settings-Reference.md#tls--auth), or `MW_TRUSTED_PROXIES`) names the proxies whose forwarding headers are believed, so each client behind them is counted as itself.
+
+**What follows the forwarded client, and what never does.** One helper decides (`ClientAddress::resolve`), and the request then carries two addresses: the socket peer, and the client it is accounted to.
+
+| Follows the client | Stays on the socket peer |
+|---|---|
+| PIN, admin password and guest PIN rate-limit buckets | local privilege (`isLocalRequest`, `peerLocal`), admin and host-machine rights |
+| ConnectionGuard failures and bans | the admin unlock's LAN gate (`canUnlockAdmin`) and `hostTrusted` |
+| the session's address and geolocation, the sessions list | the pairing-key and host-key gates, the gamepad-driver offer, every LAN-only route |
+| log lines that name a caller (`client via proxy`) | the HTTP→HTTPS redirect's tunnel exception |
+
+The setting grants no identity and no privilege, which is why it can be offered at all: a header can only change *whose* counter a request lands on. The objection to header-based trust in §6.2 (a proxy on this machine forwards the whole Internet) is about identity, and nothing here reads identity from a header. The privilege side reads `RequestGuard::privilegeAddress`, which is the peer by construction, and the tests drive wire requests from a trusted proxy claiming `127.0.0.1` and `::1` to prove none gains anything.
+
+**How the client is read.** For a peer inside `trusted_proxies` only:
+
+1. `X-Forwarded-For` when the request has one, else the standard `Forwarded: for=`. `CF-Connecting-IP` is never believed from a listed proxy: it is a single value, and a proxy that does not strip it passes along whatever the client wrote.
+2. **Right-most untrusted.** The list is walked from the right, skipping entries that are themselves listed proxies; the first one that is not is the client. When every entry is a listed proxy, the request started inside them and the left-most entry is used. Ports, IPv6 brackets, quoted `Forwarded` values and IPv4-mapped forms are parsed.
+3. A malformed list (junk, `unknown`, an obfuscated `_hidden` identifier, an empty header) on the way to the client means the peer, as if no header had come.
+
+Over the rendezvous tunnel no header is read, whatever the list says. With the list empty (the default) nothing changes: a loopback peer's PIN attempts follow the local-tunnel rule they always have (CF-Connecting-IP, else the last `X-Forwarded-For`, else the last `Forwarded`), and nothing else reads a header.
+
+**Threat model.**
+
+- **A spoofed header from a peer that is not listed is ignored.** A LAN or internet client that reaches MoonlightWeb directly can write any `X-Forwarded-For` it likes; it is never read, and the request is counted against the peer.
+- **The proxy must append, or overwrite, correctly.** The right-most entry is trusted because the listed proxy wrote it. nginx: `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;` (appends) or `$remote_addr` (overwrites). Caddy and Traefik write it correctly by default (they drop a client's own `X-Forwarded-For` unless told to trust it). A proxy that passes the client's header through untouched, or that writes only `Forwarded` while passing a client's `X-Forwarded-For` along, lets each client pick its own bucket and dodge its own ban; never list one. A proxy that adds a second header line instead of appending is fine: the last line is the one read.
+- **List the proxy's exact address.** Each entry widens who is believed. `0.0.0.0/0` and `::/0` are refused; a whole LAN range would let any machine on it name its own bucket. At most 64 entries.
+- **What a listed proxy can do if it lies or is compromised:** spread its own requests over invented addresses to dodge rate limits and bans, and put invented addresses in the sessions list. It still cannot gain a session, admin rights or the LAN's privileges, which it could not gain before either.
+
+**Bans.** A forwarded client that earns a ban is refused per request with **429** `temporarily_banned` and a `Retry-After`, on REST and on the WebSocket upgrade, because the socket is the proxy's and `accept()` cannot tell them apart. The proxy itself is exempt from both detectors once listed: its connections and failures are its clients', and banning it would lock every one of them out. Addresses are compared in canonical form, so a ban earned through the proxy also holds when the same client connects directly.
+
+**A forwarded private client stays exempt, as on the LAN.** A listed proxy that appends correctly wrote that address itself, after anything the client sent, so a client forwarded from `192.168.x.x` really is on the LAN, and the LAN is trusted the same with or without a proxy in between. Counting it would also put LAN users of a proxy at the mercy of a ban that a direct LAN connection never meets. An internet client cannot reach that exemption: it would have to make the proxy write a private address as its own peer. A forwarded loopback address is the proxy's own machine, and is exempt for the same reason.
 
 ## 6.4b Session sharing (invited players)
 

@@ -11,7 +11,7 @@ The backend is a single windowless executable (`MoonlightWeb` / `MoonlightWeb.ex
 | Directory | Classes | Responsibility |
 |---|---|---|
 | `src/server/` | `HttpServer`, `RestRouter`, `StaticFileHandler`, `HttpParser` | HTTP :80 (redirect) + HTTPS :443 listener, request parsing, routing, static frontend serving, WebSocket proxying |
-| | `AuthManager`, `ConnectionGuard` | PIN/certificate/host-key auth, sessions, rate limiting, in-process IP banning |
+| | `AuthManager`, `ConnectionGuard`, `ClientAddress` | PIN/certificate/host-key auth, sessions, rate limiting, in-process IP banning; who a request is from behind a `trusted_proxies` reverse proxy (bookkeeping only, [Security §6.4a](06-Security.md#64a-behind-a-reverse-proxy-trusted_proxies)) |
 | | `AppSettings`, `Provisioning` | `settings.json` persistence; installer `provisioning.json` first-boot consumption |
 | | `CertManager` | TLS cert discovery/loading (env var, file, CN matching), self-signed generation, hot reload |
 | | `ControlChannel` | `/ws/control` single-tab dedup WebSocket server |
@@ -34,7 +34,7 @@ The backend is a single windowless executable (`MoonlightWeb` / `MoonlightWeb.ex
 - **Keep-alive** (HTTP/1.1, closed after 15 s without a request); a client that asks for `Connection: close` gets one socket per response, which is why `ConnectionGuard`'s flood threshold is generous.
 - **WebSocket upgrades** are detected and raw-proxied to internal WS servers: signaling (48001), stream relay (48002), control channel (48003), plus the second stream slot (`/ws1` → 48011, `/ws1/stream` → 48012). The proxy cleanup lambda uses a `shared_ptr` guard (a `bool*` guard historically caused a use-after-free during `~QSslSocket` on macOS).
 - **Async routes**: handlers may take a `ResponseCallback` and answer later (30 s timeout); sockets pending an async answer are tracked in `m_PendingAsyncSockets`.
-- **Auth enforcement**: every `/api/*` request except `health`, `server/hostname`, `auth/*` and an invited player's `share/player/*` requires localhost or a valid `mw_session` cookie; `/api/admin/*` additionally requires localhost, a host session or a session unlocked with the admin password (nobody under `--noadmin`). 401s are reported to `ConnectionGuard`.
+- **Auth enforcement**: every `/api/*` request except `health`, `server/hostname`, `auth/*` and an invited player's `share/player/*` requires localhost or a valid `mw_session` cookie; `/api/admin/*` additionally requires localhost, a host session or a session unlocked with the admin password (nobody under `--noadmin`). 401s are reported to `ConnectionGuard`, against the forwarded client when the peer is a listed reverse proxy.
 
 `CertManager` resolves the TLS certificate in priority order: explicit `cert_pem`/`cert_key` from settings (each is *either an env-var name or a file path*), then file scan, then **self-signed generation** for LAN use. A CN-matching check prevents serving a stale cert after the domain changed. `reloadTls()` swaps certs hot, so a replaced certificate is picked up without a restart. A remote browser never meets any of this: it arrives over the tunnel, inside DTLS the bootstrap has already bound to this machine's key.
 

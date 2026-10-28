@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "server/ClientAddress.h"
+
 #include <QHash>
 #include <QString>
 #include <deque>
@@ -41,6 +43,17 @@
  * Loopback and private (RFC 1918 / IPv6 ULA / link-local) addresses are fully
  * exempt and never tracked — they are trusted LAN clients.
  *
+ * Behind a reverse proxy (trusted_proxies) the socket belongs to the proxy, so
+ * failures are reported against the forwarded client (ClientAddress::resolve)
+ * and a banned client is refused per request (allowRequest), not at accept().
+ * The proxies themselves are exempt like the LAN: banning one for its
+ * clients' failures would lock everybody out. A forwarded client on a private
+ * address stays exempt too — the proxy wrote that address, so the client
+ * really is on the LAN (docs/wiki/06-Security.md §6.4a).
+ *
+ * Addresses are keyed in canonical form, so "::ffff:203.0.113.5" from a
+ * dual-stack accept() and "203.0.113.5" from a forwarding header are one IP.
+ *
  * Single-threaded: only ever touched from the HttpServer/SslServer event loop
  * (main thread), so no locking is required. Time is injectable on every method
  * for deterministic unit testing.
@@ -60,6 +73,21 @@ public:
     /// within the window ban the IP. Call when a remote request is refused.
     void reportAuthFailure(const QString& ip);
     void reportAuthFailure(const QString& ip, qint64 nowMs);
+
+    /// Per-request check for a client the socket does not belong to: false
+    /// while @p client is banned and is not the socket @p peer itself (a
+    /// direct peer is already judged at accept()). Call once the forwarded
+    /// client is known.
+    bool allowRequest(const QString& client, const QString& peer) const;
+    bool allowRequest(const QString& client, const QString& peer, qint64 nowMs) const;
+
+    /// The reverse proxies whose clients are told apart (trusted_proxies).
+    /// They are exempt from both detectors.
+    void setTrustedProxies(const ClientAddress::TrustedProxies& proxies) { m_trusted = proxies; }
+    const ClientAddress::TrustedProxies& trustedProxies() const { return m_trusted; }
+
+    /// isExempt(), or one of the trusted proxies.
+    bool isExemptHere(const QString& ip) const;
 
     /// True while @p ip is within an active ban.
     bool isBanned(const QString& ip) const;
@@ -99,5 +127,9 @@ private:
     /// Drop timestamps older than @p windowMs from the front of @p q.
     static void trimWindow(std::deque<qint64>& q, qint64 nowMs, qint64 windowMs);
 
+    /// The table key for an address: canonical when it parses, else as given.
+    static QString key(const QString& ip) { return ClientAddress::normalizeOrKeep(ip); }
+
     QHash<QString, IpState> m_state;
+    ClientAddress::TrustedProxies m_trusted;
 };
