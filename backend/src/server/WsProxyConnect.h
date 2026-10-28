@@ -69,6 +69,13 @@ inline Verdict decide(SlotState state, QAbstractSocket::SocketError error, qint6
     return Verdict::Unavailable;
 }
 
+/// An error on the established tunnel that is only its normal end: the worker
+/// closed its side because the page closed its WebSocket. Not worth a warning.
+inline bool isNormalClose(QAbstractSocket::SocketError error)
+{
+    return error == QAbstractSocket::RemoteHostClosedError;
+}
+
 /// The answer the browser gets for a final verdict, sent before any upgrade.
 inline HttpResponse response(Verdict v)
 {

@@ -1667,10 +1667,15 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
 
         // Post-connect cleanup: when either side disconnects or errors out.
         QObject::connect(target, &QTcpSocket::disconnected, cleanup);
+        // A remote close is how every stream ends (the page closed its socket):
+        // debug only. Anything else stays a warning.
         QObject::connect(target, &QAbstractSocket::errorOccurred,
-                         [target, cleanup](QAbstractSocket::SocketError) {
-                             qWarning() << "[HttpServer] WebSocket proxy: connection error:"
-                                        << target->errorString();
+                         [target, cleanup](QAbstractSocket::SocketError error) {
+                             if (wsproxy::isNormalClose(error))
+                                 qDebug() << "[HttpServer] WebSocket proxy: closed by the worker";
+                             else
+                                 qWarning() << "[HttpServer] WebSocket proxy: connection error:"
+                                            << target->errorString();
                              cleanup();
                          });
     };
