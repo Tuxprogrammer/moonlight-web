@@ -195,6 +195,16 @@ function serveWorkerRequests() {
 }
 
 /**
+ * How the bootstrap's transport is loaded: one indirection, so a test can stand
+ * in for a file that only the bootstrap's origin serves.
+ */
+export const transportLoader = {
+    load(href) {
+        return import(href);
+    },
+};
+
+/**
  * Bring the connection up, if this page is reached that way.
  *
  * Resolves either way — a direct connection is not a failure — so the caller can
@@ -203,12 +213,12 @@ function serveWorkerRequests() {
  * there is nothing to start in that case.
  */
 export async function startTunnel(onStage) {
-    if (!('serviceWorker' in navigator)) return false;
+    // A direct page has no bootstrap worker, and no /v1/tunnel.js to load:
+    // asking anyway would cost a 404 and a MIME-type error in the console.
+    if (!pageCameThroughTunnel()) return false;
 
-    // The bootstrap's transport, from the bootstrap's own origin. On a direct
-    // connection this file does not exist and the import fails — which is the
-    // correct answer to "are we on the rendezvous", arrived at without having to
-    // guess from the shape of the URL.
+    // The bootstrap's transport, from the bootstrap's own origin. Should it
+    // still not load, the page is treated as direct, as it always was.
     // Addressed through location rather than as a bare specifier so nothing
     // tries to resolve it at build time: it is not part of this bundle, it is a
     // file the other origin serves, and on a direct connection it is not there
@@ -219,7 +229,7 @@ export async function startTunnel(onStage) {
     // same file — so a /v2/ can appear beside it without breaking either.
     let mod;
     try {
-        mod = await import(new URL('/v1/tunnel.js', location.origin).href);
+        mod = await transportLoader.load(new URL('/v1/tunnel.js', location.origin).href);
     } catch {
         return false;
     }
