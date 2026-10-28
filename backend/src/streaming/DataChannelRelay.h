@@ -17,6 +17,7 @@
 
 #pragma once
 
+#include "RelayClipboard.h"
 #include "RelayBase.h"
 #include "HostLagTracker.h"
 #include "HostUploadCap.h"
@@ -147,11 +148,11 @@ public:
 
     IMediaEngine* mediaEngine() const override { return m_Shim; }
 
-    /// Enable bidirectional text clipboard sync. Only called with true when
-    /// the streamed host is this machine (the backend clipboard IS the host
-    /// clipboard) — see ClipboardBridge. Must be called before the relay is
-    /// moved to its dedicated thread (Session does, right after creation).
-    void setClipboardEnabled(bool enabled);
+    /// Host clipboard sync through @p provider: ClipboardBridge when the
+    /// streamed host is this machine, RemoteClipboardProvider when it runs a
+    /// clipboard agent, null for none. Must be called on the main thread,
+    /// before the relay moves to its own thread.
+    void setClipboardProvider(ClipboardProvider* provider);
 
     /// Stop answering every gap with a keyframe request, and let the picture
     /// repair itself instead.
@@ -559,10 +560,9 @@ private:
     void sampleHostUplink(qint64 nowMs);
     /// The [HostUpload] line for @p ev, if it is one.
     void logHostUplink(const mw::hostuplink::Notice::Event& ev);
-    // Bidirectional clipboard sync (only when the streamed host is this
-    // machine). Written once on the main thread before the relay moves to its
-    // dedicated thread, read from relay/libdatachannel threads afterwards.
-    bool m_ClipboardEnabled = false;
+    // Host clipboard sync (ClipboardProvider). Attached once on the main
+    // thread before the relay moves to its dedicated thread.
+    RelayClipboard m_Clipboard;
     /// See setRideOutLoss. Written once before the thread move, read on the
     /// relay thread afterwards.
     bool m_RideOutLoss = false;

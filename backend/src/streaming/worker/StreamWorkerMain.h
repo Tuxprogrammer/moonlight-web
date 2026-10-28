@@ -34,6 +34,10 @@
  *     {"cmd":"quit"}      — graceful local teardown, then exit(0)
  *     {"cmd":"takenOver"} — notify the browser it was taken over, teardown, exit
  *     {"cmd":"revoked"}   — notify the browser it was revoked, teardown, exit
+ *     {"cmd":"clipboardAgent"|"clipboardText"|"clipboardAck",…}
+ *                         — the host's clipboard agent, relayed by the server
+ *                           (clipboard/ClipboardIpc.h); config key
+ *                           "clipboardAgent" installs the remote provider
  *     EOF                 — parent died: teardown, exit
  *   stdout (worker → parent):
  *     {"event":"response","code":<http>,"body":{...}} — the /start HTTP reply
@@ -43,6 +47,8 @@
  *                        — Mouse Keys turned on for a host with no pointing
  *                        device, or let go; put back by the parent if the
  *                        worker dies holding them
+ *     {"event":"clipboardSet"|"clipboardAnnounce",…}   — a write to, or a read
+ *                        of, the host clipboard through its agent (ClipboardIpc)
  *     {"event":"ended"}                               — session over (any cause)
  * All logging goes to the log file / stderr; stdout carries only the protocol.
  */

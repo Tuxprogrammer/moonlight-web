@@ -559,4 +559,19 @@ void run_request_guard_tests()
         // A signalling socket opened through the tunnel carries the key alone.
         CHECK(tunnelKeyRefused(false, keyB, keyA));
     }
+
+    SECTION("RequestGuard — the clipboard agents' upgrade gate");
+    {
+        // docs/design/clipboard-agent.md: an agent is not a browser, and its
+        // bearer token rides in the handshake.
+        using RequestGuard::AgentUpgrade;
+        using RequestGuard::clipboardAgentUpgrade;
+        CHECK(clipboardAgentUpgrade(false, true, false) == AgentUpgrade::Allow);
+        CHECK(clipboardAgentUpgrade(false, true, true) == AgentUpgrade::Allow);
+        CHECK(clipboardAgentUpgrade(false, false, true) == AgentUpgrade::Allow);
+        CHECK(clipboardAgentUpgrade(false, false, false) == AgentUpgrade::RefusePlaintext);
+        // A web page, whatever else: never.
+        for (int bits = 0; bits < 4; ++bits)
+            CHECK(clipboardAgentUpgrade(true, bits & 1, bits & 2) == AgentUpgrade::RefuseBrowser);
+    }
 }

@@ -118,7 +118,28 @@ add_executable(run_tests
     test_control_channel.cpp
     test_feed_ipc.cpp
     test_cert_manager.cpp
+    test_clipboard_agent_server.cpp
+    test_clipboard_agent_client.cpp
+    test_clipboard_agent_tokens.cpp
+    test_clipboard_provider.cpp
     # In-scope production units (+ their real deps)
+    # The host clipboard through an agent on the streamed host: the protocol,
+    # the server's registry, socket and router, the worker's provider and the
+    # relays' shared end — and the agent's own units, against the real server.
+    ${_src}/src/clipboard/ClipboardAgentProtocol.cpp
+    ${_src}/src/server/ClipboardAgentRegistry.cpp
+    ${_src}/src/server/ClipboardAgentServer.cpp
+    ${_src}/src/server/ClipboardAgentRouter.cpp
+    ${_src}/src/streaming/IMediaEngine.h
+    ${_src}/src/streaming/ClipboardProvider.cpp
+    ${_src}/src/streaming/RemoteClipboardProvider.cpp
+    ${_src}/src/streaming/RelayClipboard.cpp
+    ${_src}/clipboard-agent/src/AgentConfig.cpp
+    ${_src}/clipboard-agent/src/AgentClient.cpp
+    ${_src}/clipboard-agent/src/BackendSelect.cpp
+    ${_src}/clipboard-agent/src/PinCheck.cpp
+    ${_src}/clipboard-agent/src/ClipboardBackend.h
+    ${_src}/clipboard-agent/src/WlClipboardBackend.cpp
     # The router-port allocation policy, behind its gateway seam: the rules
     # that keep two MoonlightWeb hosts on one LAN out of each other's holes.
     ${_src}/src/network/RouterPortCore.cpp
@@ -211,6 +232,8 @@ target_include_directories(run_tests PRIVATE
     ${_src}/native-host/src
     # The engine's public Capabilities.h, for the JSON round trip above.
     ${_src}/native-host/include
+    # The clipboard agent's units (a program of its own, run on the host).
+    ${_src}/clipboard-agent/src
 )
 
 # Silence production qDebug() noise; keep qInfo()/qCritical() (test output).

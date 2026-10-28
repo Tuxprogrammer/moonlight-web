@@ -296,6 +296,7 @@ add_executable(mw-server
     src/server/SessionPool.cpp
     src/server/routes/AuthRoutes.cpp
     src/server/routes/HostRoutes.cpp
+    src/server/routes/ClipboardAgentRoutes.cpp
     src/server/routes/HostAppRoutes.cpp
     src/server/HostAppImage.cpp
     src/server/HostAppLauncher.cpp
@@ -382,6 +383,17 @@ add_executable(mw-server
     src/streaming/SharedFeed.cpp
     src/streaming/NativeBench.cpp
     src/streaming/ClipboardBridge.cpp
+    # Host clipboard sync behind one interface: this machine's (the bridge) or
+    # a remote host's agent, reached through the server (RemoteClipboardProvider).
+    src/streaming/ClipboardProvider.cpp
+    src/streaming/RelayClipboard.cpp
+    src/streaming/RemoteClipboardProvider.cpp
+    # The host clipboard through an agent on a streamed host: its protocol,
+    # its tokens, its sockets and the router to the stream workers.
+    src/clipboard/ClipboardAgentProtocol.cpp
+    src/server/ClipboardAgentRegistry.cpp
+    src/server/ClipboardAgentServer.cpp
+    src/server/ClipboardAgentRouter.cpp
     src/streaming/HostAudioSink.cpp
     src/streaming/StreamRelay.cpp
     src/streaming/DataChannelRelay.cpp
@@ -598,6 +610,15 @@ else() # Linux / other Unix
     target_link_libraries(mw-server PRIVATE dl)
 endif()
 
+# ── The clipboard agent for streamed hosts ─────────────────────────────────
+# A separate, small program that runs on a Sunshine host (not here) and shares
+# its desktop's clipboard with this server: docs/design/clipboard-agent.md.
+# Built alongside so releases can ship it; it builds on its own as well.
+option(MW_BUILD_CLIPBOARD_AGENT "Build moonlightweb-clipboard-agent" ON)
+if(MW_BUILD_CLIPBOARD_AGENT)
+    add_subdirectory(clipboard-agent)
+endif()
+
 # ── Linux: the capability launcher ─────────────────────────────────────────
 # KMS capture needs CAP_SYS_ADMIN, and a file capability cannot sit on
 # MoonlightWeb itself (glibc's secure mode refuses its $ORIGIN rpath — see the
@@ -694,6 +715,10 @@ if(MW_BUILD_TESTS)
         # unlike the units above — worth it: this is the check that decides
         # whether someone can inject input into the host's desktop.
         tests/test_pairing_binding.cpp
+        # The clipboard agents' tokens: who may read and write a streamed
+        # host's clipboard (docs/design/clipboard-agent.md).
+        tests/test_clipboard_agent_tokens.cpp
+        src/server/ClipboardAgentRegistry.cpp
         src/common/PairingCrypto.cpp
         src/streaming/SdpFingerprint.cpp
         src/common/Logger.cpp

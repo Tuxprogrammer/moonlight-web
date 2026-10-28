@@ -174,4 +174,17 @@ bool lockedByNoAdmin(const QString& method, const QString& path, bool shareAllow
 /// carries no key and is never refused here.
 bool tunnelKeyRefused(bool viaTunnel, const QByteArray& tunnelKey, const QByteArray& boundKey);
 
+/// What the clipboard agents' upgrade (/ws/clipboard-agent) gets, before its
+/// token is looked at. An agent is not a browser: a handshake carrying Origin
+/// came from a page, which has no business there whatever token it holds. The
+/// bearer token travels in the handshake, so it must be encrypted unless the
+/// agent sits on this machine.
+enum class AgentUpgrade
+{
+    Allow,
+    RefuseBrowser,   ///< 403: an Origin header — a web page.
+    RefusePlaintext, ///< 403: plain HTTP from another machine.
+};
+AgentUpgrade clipboardAgentUpgrade(bool hasOrigin, bool encrypted, bool peerLoopback);
+
 } // namespace RequestGuard

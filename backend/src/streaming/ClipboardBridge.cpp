@@ -28,15 +28,6 @@
 #include <QPointer>
 #include <QtDebug>
 
-namespace {
-// Windows virtual-key codes for the injected paste chord (the Moonlight
-// protocol speaks VK regardless of the host OS — Sunshine translates).
-constexpr short kVkControl = 0x11;
-constexpr short kVkV = 0x56;
-// Modifier bitmask matching the relays' keydown encoding (Ctrl = 0x02).
-constexpr char kModCtrl = 0x02;
-} // namespace
-
 ClipboardBridge* ClipboardBridge::instance()
 {
     // Parented to the app so it dies with the main event loop. Thread-safe
@@ -47,7 +38,7 @@ ClipboardBridge* ClipboardBridge::instance()
 }
 
 ClipboardBridge::ClipboardBridge(QObject* parent)
-    : QObject(parent)
+    : ClipboardProvider(parent)
 {
     connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this,
             &ClipboardBridge::onClipboardChanged);
@@ -84,12 +75,7 @@ void ClipboardBridge::pasteFromClient(IMediaEngine* engine, const QString& text,
             // Inject the chord only AFTER the clipboard is committed — same
             // main-thread hop, so ordering is structural. Li input calls are
             // thread-safe (guarded by the shim's connected atomic).
-            IMediaEngine* s = shimGuard.data();
-            if (!s) return;
-            if (wrapCtrl) s->sendKeyEvent(kVkControl, true, kModCtrl, 0);
-            s->sendKeyEvent(kVkV, true, kModCtrl, 0);
-            s->sendKeyEvent(kVkV, false, kModCtrl, 0);
-            if (wrapCtrl) s->sendKeyEvent(kVkControl, false, 0, 0);
+            injectPasteChord(shimGuard.data(), wrapCtrl);
         },
         Qt::QueuedConnection);
 }
@@ -98,25 +84,6 @@ void ClipboardBridge::setFromClient(const QString& text)
 {
     QMetaObject::invokeMethod(
         this, [this, text]() { commitText(ClipboardMsg::capText(text)); }, Qt::QueuedConnection);
-}
-
-void ClipboardBridge::handleClientMessage(IMediaEngine* engine, const ClipboardMsg::Request& req,
-                                          const char* logTag)
-{
-    switch (req.action) {
-    case ClipboardMsg::Action::None: return;
-    case ClipboardMsg::Action::Ignore:
-        qDebug() << logTag << "Clipboard message ignored (no host clipboard sync here)";
-        return;
-    case ClipboardMsg::Action::Paste:
-        if (req.truncated) qInfo() << logTag << "Clipboard paste truncated to" << kMaxTextChars;
-        instance()->pasteFromClient(engine, req.text, req.wrapCtrl);
-        return;
-    case ClipboardMsg::Action::Set:
-        if (req.truncated) qInfo() << logTag << "Clipboard set truncated to" << kMaxTextChars;
-        instance()->setFromClient(req.text);
-        return;
-    }
 }
 
 void ClipboardBridge::commitText(const QString& t)

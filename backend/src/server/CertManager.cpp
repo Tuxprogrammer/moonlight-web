@@ -19,6 +19,7 @@
 #include "common/Logger.h"
 
 #include <QCoreApplication>
+#include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
 #include <QDirIterator>
@@ -275,6 +276,29 @@ bool CertManager::certMatchesDomain(const QSslCertificate& cert, const QString& 
         if (matches(san)) return true;
 
     return false;
+}
+
+QString CertManager::spkiPin(const QSslCertificate& cert)
+{
+    if (cert.isNull()) return QString();
+    // QSslKey writes a public key as "PUBLIC KEY", i.e. the DER SPKI —
+    // the same bytes `openssl x509 -pubkey | openssl pkey -pubin -outform der`
+    // gives, so a pin can be checked by hand.
+    const QByteArray spki = cert.publicKey().toDer();
+    if (spki.isEmpty()) return QString();
+    return QStringLiteral("sha256/") +
+           QString::fromLatin1(
+               QCryptographicHash::hash(spki, QCryptographicHash::Sha256).toBase64());
+}
+
+QStringList CertManager::keyPins() const
+{
+    QStringList pins;
+    for (const QSslConfiguration* cfg : {&m_SslConfig, &m_LocalSslConfig}) {
+        const QString pin = spkiPin(cfg->localCertificate());
+        if (!pin.isEmpty() && !pins.contains(pin)) pins.append(pin);
+    }
+    return pins;
 }
 
 bool CertManager::certFileMatchesDomain(const QString& pemPath, const QString& domain)

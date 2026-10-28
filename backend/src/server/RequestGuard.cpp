@@ -344,4 +344,11 @@ bool tunnelKeyRefused(bool viaTunnel, const QByteArray& tunnelKey, const QByteAr
     return !boundKey.isEmpty() && boundKey != tunnelKey;
 }
 
+AgentUpgrade clipboardAgentUpgrade(bool hasOrigin, bool encrypted, bool peerLoopback)
+{
+    if (hasOrigin) return AgentUpgrade::RefuseBrowser;
+    if (!encrypted && !peerLoopback) return AgentUpgrade::RefusePlaintext;
+    return AgentUpgrade::Allow;
+}
+
 } // namespace RequestGuard
