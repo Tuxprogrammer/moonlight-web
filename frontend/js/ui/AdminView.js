@@ -34,6 +34,7 @@ import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
 import { refreshClientLog } from '../util/ClientLog.js';
 import { GamepadDriverNotice } from './GamepadDriverNotice.js';
+import { ClipboardAgentPanel } from './ClipboardAgentPanel.js';
 
 export class AdminView {
     // Backend statusJson "phase" values that mean activation is still running.
@@ -181,6 +182,10 @@ export class AdminView {
         this._cleanState = {};
         this._dirty = false;
 
+        // Clipboard agents on the other hosts: a panel with its own state,
+        // mounted again after each render (see _mountClipboardAgents).
+        this._clipboardAgents = null;
+
         // Sessions polling
         this._sessionsPollTimer = null;
         // Pagination for sessions table
@@ -205,10 +210,12 @@ export class AdminView {
         await this._loadState();
         await this._loadStreamingState();
         await this._loadHostApps();
+        await this._loadClipboardAgents();
         await this._loadInternetState();
         await this._loadSessions();
         this.render();
         this.bindEvents();
+        if (this._clipboardAgents) this._clipboardAgents.startPolling();
         // Provisioning may have started Internet Access before the page opened;
         // keep the loader live until the backend reaches a terminal phase.
         if (this._activating) this._startPhasePolling();
@@ -293,6 +300,18 @@ export class AdminView {
             // An older server has no such route: the section stays hidden.
             console.warn('[Admin] Failed to load the apps on this PC:', err);
         }
+    }
+
+    async _loadClipboardAgents() {
+        const panel = new ClipboardAgentPanel();
+        await panel.load();
+        // An older server, or no other host: the section stays out.
+        this._clipboardAgents = panel.supported && panel.hosts.length ? panel : null;
+    }
+
+    _mountClipboardAgents() {
+        const el = this.container.querySelector('#admin-section-clipboard-agents');
+        if (el && this._clipboardAgents) this._clipboardAgents.mount(el);
     }
 
     async _loadInternetState() {
@@ -532,6 +551,7 @@ export class AdminView {
     }
 
     destroy() {
+        if (this._clipboardAgents) this._clipboardAgents.destroy();
         this._stopSessionsPolling();
         this._stopPhasePolling();
         this._stopRendezvousPolling();
@@ -1162,10 +1182,16 @@ export class AdminView {
                     </div>
                 </div>
                 ${this._hostAppsSupported ? this._renderHostApps() : ''}
+                ${
+                    this._clipboardAgents
+                        ? '<div class="settings-section" id="admin-section-clipboard-agents"></div>'
+                        : ''
+                }
                 ${this._renderAdvanced()}
             </div>
         `;
 
+        this._mountClipboardAgents();
         this._markClean();
     }
 
