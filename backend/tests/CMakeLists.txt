@@ -108,6 +108,7 @@ add_executable(run_tests
     test_session_metrics.cpp
     test_us_scancode.cpp
     test_input_watchdog.cpp
+    test_pairing_chain.cpp
     test_keyboard_layout.cpp
     test_native_capabilities_json.cpp
     test_edition.cpp
@@ -180,6 +181,8 @@ add_executable(run_tests
     # be streamed. Both are pure enough to test without the service.
     ${_src}/src/backend/MultiSeatApiClient.cpp
     ${_src}/src/backend/IdentityManager.cpp
+    # The pairing handshake's sequencing, driven against a fake host.
+    ${_src}/src/backend/PairingChain.cpp
     # AppSettings and AuthManager both reach into MW-BIND-v1 now: the host
     # identity key, and the pairing key bound to a session.
     ${_src}/src/common/PairingCrypto.cpp

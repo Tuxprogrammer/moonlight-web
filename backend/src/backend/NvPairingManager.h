@@ -18,6 +18,7 @@
 #pragma once
 
 #include "IdentityManager.h"
+#include "PairingSteps.h"
 
 #include <QString>
 #include <QByteArray>
@@ -38,24 +39,9 @@ typedef struct evp_pkey_st EVP_PKEY;
 // server — a nested loop there would re-enter request dispatch and free objects
 // still held on the stack (use-after-free). The owner must keep the instance
 // alive until the final callback fires.
-class NvPairingManager
+class NvPairingManager : public PairingSteps
 {
 public:
-    enum PairState
-    {
-        PAIRED,
-        PIN_WRONG,
-        FAILED,
-        ALREADY_IN_PROGRESS
-    };
-
-    enum InitResult
-    {
-        INIT_OK,
-        INIT_FAILED,
-        INIT_ALREADY_IN_PROGRESS
-    };
-
     /// @param identity Which client identity to pair. Default-constructed means
     ///                  the global one, which is what every Sunshine pairing uses.
     ///                  A per-seat identity is what makes Wolf treat seats as
@@ -66,7 +52,7 @@ public:
     NvPairingManager(const QString& appVersion, const QString& host, quint16 httpPort,
                      quint16 httpsPort, ClientIdentity identity = {},
                      const QString& uniqueId = QString());
-    ~NvPairingManager();
+    ~NvPairingManager() override;
 
     // Owns raw OpenSSL handles (X509*/EVP_PKEY*) and a QNetworkAccessManager*
     // freed in the destructor — non-copyable to avoid double-free.
@@ -75,14 +61,16 @@ public:
 
     // Stage 1 (async): send salt + client cert → server displays PIN.
     // The getservercert request blocks server-side up to 60s until the user
-    // enters the PIN in Sunshine; `cb` fires when the request resolves. Fully
-    // event-driven — no nested Qt event loop (see class comment).
-    void initiatePairing(std::function<void(InitResult)> cb);
+    // enters the PIN in Sunshine; `onSent` fires once the request is written
+    // to the host, `cb` when it resolves. Fully event-driven — no nested Qt
+    // event loop (see class comment).
+    void initiatePairing(std::function<void(InitResult)> cb, std::function<void()> onSent) override;
 
     // Stages 2-5 (async): complete pairing with the user-provided PIN.
     // `cb` receives the final state and, on PAIRED, the server certificate PEM.
-    void completePairing(const QString& pin,
-                         std::function<void(PairState, const QByteArray& serverCertPem)> cb);
+    void
+    completePairing(const QString& pin,
+                    std::function<void(PairState, const QByteArray& serverCertPem)> cb) override;
 
 private:
     QByteArray generateRandomBytes(int length);
@@ -97,10 +85,12 @@ private:
 
     // Asynchronous HTTP request. Invokes cb(body, error) when the reply
     // finishes; `error` is empty on success, otherwise the reply error string
-    // (and `body` is empty). Never blocks the calling thread.
+    // (and `body` is empty). `onSent` (may be empty) fires when the request
+    // has been written to the host. Never blocks the calling thread.
     void openConnection(const QString& scheme, const QString& command, const QString& arguments,
                         int timeoutMs,
-                        std::function<void(const QString& body, const QString& error)> cb);
+                        std::function<void(const QString& body, const QString& error)> cb,
+                        std::function<void()> onSent = {});
 
     // Fire-and-forget unpair (used to abort a half-completed handshake).
     void unpair();

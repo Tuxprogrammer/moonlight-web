@@ -32,6 +32,7 @@
 
 #include "NvComputer.h"
 #include "NvHTTP.h"
+#include "PairingChain.h"
 #include "streambackend/IStreamBackend.h"
 #include "../common/Types.h"
 
@@ -285,6 +286,9 @@ private:
     // Terminal error from a background pairing chain, delivered to the next poll
     // and then cleared. uuid → user-facing message.
     QMap<QString, QString> m_PairingError;
+
+    // Where each session's chain stands, for the /pair reply's `stage`.
+    QMap<QString, PairingChain::Stage> m_PairingStage;
 
     // Drives stage 1 → stages 2-5 as an async chain against the session's
     // NvPairingManager. Keeps m_SubmitInFlight set for the whole run.

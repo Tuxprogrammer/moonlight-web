@@ -17,11 +17,10 @@
 
 #include "PairingChain.h"
 
-#include "NvPairingManager.h"
-
 #include <QRandomGenerator>
 #include <QTimer>
 #include <memory>
+#include <optional>
 
 namespace PairingChain {
 
@@ -38,12 +37,36 @@ QString generatePin()
     return QString::asprintf("%04d", pin);
 }
 
-void run(NvPairingManager* pm, const QString& pin, PinAnnouncer announcer, ResultCallback cb)
+QString stageName(Stage stage)
+{
+    switch (stage) {
+    case Stage::HostHasRequest: return QStringLiteral("enter_pin");
+    case Stage::Verifying: return QStringLiteral("verifying");
+    case Stage::Contacting:
+    default: return QStringLiteral("contacting");
+    }
+}
+
+bool hostContacted(Stage stage)
+{
+    return stage != Stage::Contacting;
+}
+
+void run(PairingSteps* pm, const QString& pin, PinAnnouncer announcer, ResultCallback cb,
+         StageCallback onStage)
 {
     if (!pm) {
         cb(Result{Outcome::Failed, {}});
         return;
     }
+
+    // Stages only move forward: a late or repeated "sent" is not news.
+    auto reached = std::make_shared<std::optional<Stage>>();
+    auto advance = [onStage, reached](Stage stage) {
+        if (*reached && static_cast<int>(**reached) >= static_cast<int>(stage)) return;
+        *reached = stage;
+        if (onStage) onStage(stage);
+    };
 
     // initiatePairing() answers synchronously when stage 1 already succeeded on
     // an earlier attempt (NvPairingManager::m_Stage1Done). Track that, because
@@ -57,15 +80,15 @@ void run(NvPairingManager* pm, const QString& pin, PinAnnouncer announcer, Resul
     auto report = [cb](const Result& result) { cb(result); };
 
     pm->initiatePairing(
-        [pm, pin, report, settledSynchronously](NvPairingManager::InitResult initResult) {
+        [pm, pin, report, settledSynchronously, advance](PairingSteps::InitResult initResult) {
             *settledSynchronously = true;
 
-            if (initResult == NvPairingManager::INIT_ALREADY_IN_PROGRESS) {
+            if (initResult == PairingSteps::INIT_ALREADY_IN_PROGRESS) {
                 report(Result{Outcome::HostBusy, {}});
                 return;
             }
 
-            if (initResult != NvPairingManager::INIT_OK) {
+            if (initResult != PairingSteps::INIT_OK) {
                 // Stage 1 timed out or the host was unreachable. Non-terminal: the
                 // caller keeps the session and may run the chain again.
                 report(Result{Outcome::Retry, {}});
@@ -74,24 +97,29 @@ void run(NvPairingManager* pm, const QString& pin, PinAnnouncer announcer, Resul
 
             // Stages 2-5 — challenge/response. `pm` is borrowed and outlives this
             // by contract; the caller pins it for the whole chain.
+            advance(Stage::Verifying);
             pm->completePairing(
-                pin, [report](NvPairingManager::PairState state, const QByteArray& serverCertPem) {
+                pin, [report](PairingSteps::PairState state, const QByteArray& serverCertPem) {
                     switch (state) {
-                    case NvPairingManager::PAIRED:
+                    case PairingSteps::PAIRED:
                         report(Result{Outcome::Paired, serverCertPem});
                         break;
 
-                    case NvPairingManager::PIN_WRONG:
+                    case PairingSteps::PIN_WRONG:
                         // Not accepted yet — non-terminal, same as stage-1 failure.
                         report(Result{Outcome::Retry, {}});
                         break;
 
-                    case NvPairingManager::ALREADY_IN_PROGRESS:
-                    case NvPairingManager::FAILED:
+                    case PairingSteps::ALREADY_IN_PROGRESS:
+                    case PairingSteps::FAILED:
                     default: report(Result{Outcome::Failed, {}}); break;
                     }
                 });
-        });
+        },
+        [advance]() { advance(Stage::HostHasRequest); });
+
+    // Nothing settled: stage 1 went to the network and the host has yet to see it.
+    if (!*settledSynchronously) advance(Stage::Contacting);
 
     // Reaching here with nothing reported means stage 1 went to the network and
     // will be parked on the host waiting for a PIN. That is the only moment an
