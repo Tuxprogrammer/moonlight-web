@@ -118,7 +118,15 @@ add_executable(run_tests
     test_control_channel.cpp
     test_feed_ipc.cpp
     test_cert_manager.cpp
+    test_clipboard_agent_server.cpp
+    test_clipboard_agent_tokens.cpp
     # In-scope production units (+ their real deps)
+    # The host clipboard through an agent on the streamed host: the protocol,
+    # the server's registry, socket and router.
+    ${_src}/src/clipboard/ClipboardAgentProtocol.cpp
+    ${_src}/src/server/ClipboardAgentRegistry.cpp
+    ${_src}/src/server/ClipboardAgentServer.cpp
+    ${_src}/src/server/ClipboardAgentRouter.cpp
     # The router-port allocation policy, behind its gateway seam: the rules
     # that keep two MoonlightWeb hosts on one LAN out of each other's holes.
     ${_src}/src/network/RouterPortCore.cpp

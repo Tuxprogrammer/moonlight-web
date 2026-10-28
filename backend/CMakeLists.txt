@@ -296,6 +296,7 @@ add_executable(mw-server
     src/server/SessionPool.cpp
     src/server/routes/AuthRoutes.cpp
     src/server/routes/HostRoutes.cpp
+    src/server/routes/ClipboardAgentRoutes.cpp
     src/server/routes/HostAppRoutes.cpp
     src/server/HostAppImage.cpp
     src/server/HostAppLauncher.cpp
@@ -382,6 +383,12 @@ add_executable(mw-server
     src/streaming/SharedFeed.cpp
     src/streaming/NativeBench.cpp
     src/streaming/ClipboardBridge.cpp
+    # The host clipboard through an agent on a streamed host: its protocol,
+    # its tokens, its sockets and the router to the stream workers.
+    src/clipboard/ClipboardAgentProtocol.cpp
+    src/server/ClipboardAgentRegistry.cpp
+    src/server/ClipboardAgentServer.cpp
+    src/server/ClipboardAgentRouter.cpp
     src/streaming/HostAudioSink.cpp
     src/streaming/StreamRelay.cpp
     src/streaming/DataChannelRelay.cpp
@@ -694,6 +701,10 @@ if(MW_BUILD_TESTS)
         # unlike the units above — worth it: this is the check that decides
         # whether someone can inject input into the host's desktop.
         tests/test_pairing_binding.cpp
+        # The clipboard agents' tokens: who may read and write a streamed
+        # host's clipboard (docs/design/clipboard-agent.md).
+        tests/test_clipboard_agent_tokens.cpp
+        src/server/ClipboardAgentRegistry.cpp
         src/common/PairingCrypto.cpp
         src/streaming/SdpFingerprint.cpp
         src/common/Logger.cpp

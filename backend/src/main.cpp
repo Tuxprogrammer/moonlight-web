@@ -83,6 +83,10 @@
 #include "server/StreamActivity.h"
 #include "server/routes/AuthRoutes.h"
 #include "server/routes/HostRoutes.h"
+#include "server/routes/ClipboardAgentRoutes.h"
+#include "server/ClipboardAgentRegistry.h"
+#include "server/ClipboardAgentRouter.h"
+#include "server/ClipboardAgentServer.h"
 #include "server/routes/HostAppRoutes.h"
 #include "server/routes/ShareRoutes.h"
 #include "server/routes/SystemRoutes.h"
@@ -2923,6 +2927,33 @@ int main(int argc, char* argv[])
     });
 
     registerHostRoutes(server, computerManager);
+
+    // Clipboard agents on streamed hosts (docs/design/clipboard-agent.md):
+    // their tokens and switches, their sockets (loopback, behind the
+    // /ws/clipboard-agent upgrade), and the router that joins them to the
+    // stream workers allowed to use them.
+    ClipboardAgentRegistry clipboardAgents(ClipboardAgentRegistry::defaultFilePath());
+    ClipboardAgentServer clipboardAgentServer(clipboardAgents);
+    ClipboardAgentRouter clipboardRouter(clipboardAgentServer);
+    if (clipboardAgentServer.listen()) {
+        server.setClipboardAgentEndpoint(
+            clipboardAgentServer.port(),
+            [&clipboardAgents, &computerManager](const HttpRequest& r) {
+                // A token for a host no longer in the list opens nothing.
+                const QString host = clipboardAgents.hostForToken(
+                    ClipboardAgentServer::bearerToken(r.headers.value("authorization").toLatin1()));
+                return !host.isEmpty() && computerManager.getHost(host) != nullptr;
+            });
+    }
+    QObject::connect(&clipboardAgents, &ClipboardAgentRegistry::availabilityChanged, qApp,
+                     [&clipboardRouter](const QString& host, bool available) {
+                         clipboardRouter.onAvailabilityChanged(host, available);
+                     });
+    QObject::connect(&clipboardAgentServer, &ClipboardAgentServer::agentText, qApp,
+                     [&clipboardRouter](const QString& host, const QString& text) {
+                         clipboardRouter.onAgentText(host, text);
+                     });
+    registerClipboardAgentRoutes(server, computerManager, clipboardAgents);
     registerHostAppRoutes(server, appSettings);
     // The game launchers installed on this PC get a card each, the first start
     // after an install or an update (as Sunshine's installer gives Steam one).
