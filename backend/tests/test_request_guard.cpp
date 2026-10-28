@@ -559,4 +559,73 @@ void run_request_guard_tests()
         // A signalling socket opened through the tunnel carries the key alone.
         CHECK(tunnelKeyRefused(false, keyB, keyA));
     }
+    SECTION("RequestGuard — OpenID Connect");
+
+    {
+        // The provider sends the browser back with a cross-site top-level GET.
+        // /auth/oidc/* sits outside /api/ precisely so that is let through —
+        // and the same request aimed at the API is still refused.
+        const auto fromIdp = [](const char* path) {
+            Request r;
+            r.method = "GET";
+            r.path = path;
+            r.headers = hdr({{"sec-fetch-site", "cross-site"},
+                             {"sec-fetch-mode", "navigate"},
+                             {"host", "mw.example.com"}});
+            Context c;
+            c.publicDomain = "mw.example.com";
+            return evaluate(r, c);
+        };
+        const Decision cb = fromIdp("/auth/oidc/callback?code=c&state=s");
+        CHECK(cb.outcome == Outcome::Allow);
+        CHECK(!cb.localPrivilege);
+        CHECK(!cb.adminPrivilege);
+        CHECK(fromIdp("/auth/oidc/start").outcome == Outcome::Allow);
+        CHECK(fromIdp("/api/auth/status").outcome == Outcome::BlockCrossSite);
+        CHECK(fromIdp("/api/auth/oidc/callback").outcome == Outcome::BlockCrossSite);
+
+        // An admin group's session from another machine: admin rights for
+        // reads, writes only with the admin key, and never the host machine.
+        const auto oidcAdmin = [](const char* method, bool key) {
+            Request r;
+            r.method = method;
+            r.path = "/api/admin/settings";
+            r.headers = hdr({{"sec-fetch-site", "same-origin"}, {"host", "mw.example.com"}});
+            Context c;
+            c.oidcAdmin = true;
+            c.adminKeyOk = key;
+            c.publicDomain = "mw.example.com";
+            return evaluate(r, c);
+        };
+        CHECK(oidcAdmin("GET", false).adminPrivilege);
+        CHECK(!oidcAdmin("POST", false).adminPrivilege);
+        CHECK(oidcAdmin("POST", true).adminPrivilege);
+        CHECK(!oidcAdmin("GET", false).hostMachine);
+        CHECK(!oidcAdmin("GET", false).localPrivilege);
+
+        // A plain OIDC session is just a session: no admin, key or not.
+        Request r;
+        r.method = "POST";
+        r.path = "/api/admin/settings";
+        r.headers = hdr({{"sec-fetch-site", "same-origin"}, {"host", "mw.example.com"}});
+        Context plain;
+        plain.adminKeyOk = true;
+        CHECK(!evaluate(r, plain).adminPrivilege);
+
+        // --noadmin outranks the provider too.
+        Context locked;
+        locked.oidcAdmin = true;
+        locked.adminKeyOk = true;
+        locked.adminLocked = true;
+        CHECK(!evaluate(r, locked).adminPrivilege);
+
+        // The admin key goes to an admin group's session, not to a plain one.
+        Decision remote;
+        Context viaOidc;
+        viaOidc.oidcAdmin = true;
+        CHECK(adminTokenReply(remote, viaOidc, true) == AdminTokenReply::Grant);
+        CHECK(adminTokenReply(remote, Context{}, true) == AdminTokenReply::Empty);
+        viaOidc.adminLocked = true;
+        CHECK(adminTokenReply(remote, viaOidc, true) == AdminTokenReply::Empty);
+    }
 }

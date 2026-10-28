@@ -710,6 +710,18 @@ bool AppSettings::shareInBoothMode() const
     return readAll().value("share_in_booth_mode").toBool(false);
 }
 
+Oidc::Settings AppSettings::oidcSettings() const
+{
+    return Oidc::Settings::fromJson(readAll());
+}
+
+void AppSettings::setOidcSettings(const Oidc::Settings& settings)
+{
+    QJsonObject obj = readAll();
+    settings.writeTo(obj);
+    writeAll(obj);
+}
+
 QString AppSettings::keyboardLayoutFidelity() const
 {
     const QJsonValue value = readAll().value("keyboard_layout_fidelity");

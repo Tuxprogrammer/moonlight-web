@@ -24,6 +24,7 @@
 #include <QJsonObject>
 
 #include "../streaming/StreamConfig.h"
+#include "OidcFlow.h"
 
 // Persistent settings stored in QStandardPaths::AppDataLocation/settings.json,
 // or in the file named by --config.
@@ -172,6 +173,14 @@ public:
     // at startup. Explained to owners in the wiki, Security §6.2.2.
 
     bool shareInBoothMode() const;
+
+    // ── OpenID Connect login ──────────────────────────────────────────────────
+    // The oidc_* keys and public_url, set from the admin page (OIDC section) or
+    // by editing the file; read on every login, so a change applies to the next
+    // one. The client secret in the file yields to MW_OIDC_CLIENT_SECRET(_FILE)
+    // (Oidc::effectiveClientSecret). See docs/design/oidc-login.md.
+    Oidc::Settings oidcSettings() const;
+    void setOidcSettings(const Oidc::Settings& settings);
 
     // ── Keyboard layout fidelity ──────────────────────────────────────────────
     //
