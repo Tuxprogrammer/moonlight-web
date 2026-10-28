@@ -32,7 +32,16 @@ struct HttpRequest
     QMap<QString, QString> queryParams;
     QMap<QString, QString> pathParams;
     QByteArray body;
-    QString clientAddress;      // Populated by HttpServer from socket peer
+    QString clientAddress;      // Populated by HttpServer from socket peer. The
+                                // ONLY address a privilege check may read.
+    QString sourceAddress;      // Who the request is accounted to: the peer, or
+                                // behind a trusted_proxies peer the client it
+                                // forwards (ClientAddress::resolve). Rate limits,
+                                // bans, sessions list, geolocation, logs; never
+                                // privilege. Read it through source().
+    QString attemptAddress;     // Where a PIN/password attempt is counted
+                                // (ClientAddress::Resolution::attempt). Read it
+                                // through AuthManager::attemptAddress(req).
     bool isLocal = false;       // Populated by HttpServer: loopback peer OR a valid
                                 // host-key session (browser on the host machine
                                 // reaching us through the public domain) OR a LAN
@@ -65,6 +74,12 @@ struct HttpRequest
                                 // currently set when the percent-decoded path
                                 // carries control characters (CR/LF smuggled in
                                 // as %0d/%0a). Answered with 400 and never routed.
+
+    /// sourceAddress, or the peer for a request HttpServer did not stamp.
+    const QString& source() const
+    {
+        return sourceAddress.isEmpty() ? clientAddress : sourceAddress;
+    }
 };
 
 struct HttpResponse

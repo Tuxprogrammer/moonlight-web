@@ -16,6 +16,7 @@
 TestStats g_stats;
 
 void run_connection_guard_tests();
+void run_client_address_tests();
 void run_request_guard_tests();
 void run_api_csrf_tests();
 void run_share_manager_tests();
@@ -34,6 +35,7 @@ int main(int argc, char** argv)
     QStandardPaths::setTestModeEnabled(true);
 
     run_connection_guard_tests();
+    run_client_address_tests();
     run_request_guard_tests();
     run_api_csrf_tests();
     run_share_manager_tests();

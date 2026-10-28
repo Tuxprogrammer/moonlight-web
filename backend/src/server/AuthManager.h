@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "common/Types.h"
+
 #include <QObject>
 #include <QHash>
 #include <QMap>
@@ -404,8 +406,15 @@ public:
      *  sent the request. Never for a LAN or internet peer: one of those could
      *  forge the header and buy a fresh counter with every guess.
      *
+     *  This is step 3 of ClientAddress::resolve with no trusted_proxies; a peer
+     *  listed there gets its clients told apart by the right-most untrusted
+     *  forwarded entry instead (step 2).
+     *
      *  @p headers are the request's, with lower-case names. */
     static QString attemptAddress(const QString& peer, const QMap<QString, QString>& headers);
+    /** The same for a request HttpServer stamped (HttpRequest::attemptAddress),
+     *  trusted_proxies included; an unstamped one falls back to the above. */
+    static QString attemptAddress(const HttpRequest& req);
 
     // ── Session persistence ───────────────────────────────────────────────────
     /** Save active sessions to disk (app data directory). */
