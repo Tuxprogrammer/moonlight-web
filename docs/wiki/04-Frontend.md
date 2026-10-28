@@ -11,7 +11,9 @@ The frontend is a **framework-less, build-less** web app served directly by the 
 ```
 frontend/
 ├── index.html                  # single page shell: header + #main-content + footer, PWA meta
-├── manifest.webmanifest        # PWA manifest (installable, icons)
+├── manifest.webmanifest        # PWA manifest (installable, icons); linked with
+│                               # crossorigin="use-credentials", so a proxy that signs
+│                               # users in with a cookie still lets the browser fetch it
 │                               # /version.json is synthesised by the backend from
 │                               # the app version — VersionGuard polls it to force-reload stale PWAs
 ├── css/
