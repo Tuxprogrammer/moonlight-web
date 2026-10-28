@@ -308,7 +308,7 @@ caveats).
 |---|---|
 | **Tags** | `latest` · `0.4.1` · `0.4` · `sha-<commit>`. Release tags only — no `edge`, no nightly, so `latest` can never be work in progress. |
 | **Ports to open** | **443/tcp** (web UI + signalling) and **80/tcp** (HTTP→HTTPS redirect). WebRTC media takes **48550‑48573/udp**, one port per stream slot, with or without UPnP. A GameStream host is reached *outbound* on 47989/47984/47990 tcp, 47998‑48000 udp, 48010 tcp/udp. |
-| **Volume** | `/data` — settings, TLS material, paired hosts and the **client identity**. Losing it un‑pairs every host. |
+| **Volume** | `/data` — settings, TLS material, paired hosts and the **client identity**. Losing it un‑pairs every host. It must belong to the user the container runs as: with `--cap-drop ALL` not even root writes to a bind mount it does not own, and the container stops with a report saying who owns it and what to change ([Volume permissions](docker/README.md#volume-permissions)). |
 | **Env** | `MW_HTTPS_PORT` · `MW_HTTP_PORT` · `MW_UPNP` · `MW_ALLOWED_TRANSPORTS` · `TZ` |
 | **GPU** | **None required.** The paired host encodes and the browser decodes; no `/dev/dri`, `/dev/input` or privileged container. |
 
@@ -317,7 +317,7 @@ caveats).
 
 **This image cannot host a screen**: add the gaming PC from the hosts page instead.
 
-Full reference — ports, volume, backups, non‑root, systemd, troubleshooting: **[`docker/README.md`](docker/README.md)**.
+Full reference — ports, volume, backups, a hardened compose file (non‑root, no capabilities, read‑only root filesystem), systemd, troubleshooting: **[`docker/README.md`](docker/README.md)**.
 
 ### First launch (all platforms)
 

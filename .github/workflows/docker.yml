@@ -99,9 +99,24 @@ env:
   REGISTRY: ghcr.io
 
 jobs:
+  # ── The entrypoint, checked before two C++ builds are spent on it ────────
+  # shellcheck plus docker/test-entrypoint.sh: the volume preflight run on the
+  # runner as a non-root user, then in containers for what needs one (root
+  # with cap_drop ALL, --user, a read-only root filesystem). About a minute;
+  # shellcheck and docker are both preinstalled on the runner.
+  entrypoint:
+    name: Entrypoint (shellcheck + tests)
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: shellcheck docker/entrypoint.sh docker/test-entrypoint.sh
+      - run: bash docker/test-entrypoint.sh
+
   # ── One image per architecture, pushed by digest ─────────────────────────
   build:
     name: Build ${{ matrix.platform }}
+    needs: entrypoint
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 90
     # Grants access to the MW_* DNS/ACME secrets, so the image can turn Internet

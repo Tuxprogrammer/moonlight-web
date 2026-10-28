@@ -5,7 +5,7 @@
 #  Three jobs, then it gets out of the way with exec so the server is PID 1 and
 #  receives Docker's signals directly:
 #
-#    1. make $HOME (the mounted volume) usable,
+#    1. make $HOME (the mounted volume) usable, or say exactly why it is not,
 #    2. apply the handful of settings that have to be decided before the server
 #       starts — the listener ports and UPnP — from environment variables,
 #    3. drop the single-instance lock left behind by a container that was
@@ -39,8 +39,126 @@ for arg in "$@"; do
     esac
 done
 
-mkdir -p "$DATA" "$HOME/.config" "$XDG_RUNTIME_DIR"
-chmod 700 "$XDG_RUNTIME_DIR"
+# ── The volume must be writable, or nothing starts ───────────────────────────
+# Everything that has to survive a `docker rm` lives under $HOME, so a volume
+# the container cannot write to is fatal. The usual cause is a bind mount owned
+# by another uid while root runs with cap_drop: ALL: that removes
+# CAP_DAC_OVERRIDE, the capability that lets root write where its uid may not.
+# It used to show as a bare "mkdir: Permission denied", repeated by the restart
+# policy forever; it is now one report saying who we are, what we found and
+# what to change, then exit 1.
+_uid=$(id -u)
+_gid=$(id -g)
+
+# Creates $1 if needed and proves a file can be made in it, by making one. On
+# failure _why holds the system's reason (Permission denied, Read-only …).
+probe_dir() {
+    _why=''
+    if ! _out=$(mkdir -p "$1" 2>&1); then
+        _why=${_out##*: }
+        return 1
+    fi
+    _probe="$1/.moonlightweb-write-test.$$"
+    if ! _out=$(touch "$_probe" 2>&1); then
+        _why=${_out##*: }
+        return 1
+    fi
+    rm -f "$_probe"
+}
+
+# Bit 1 of the effective capability set is CAP_DAC_OVERRIDE.
+has_dac_override() {
+    _eff=$(sed -n 's/^CapEff:[[:space:]]*//p' /proc/self/status 2>/dev/null) || return 1
+    case "$_eff" in '' | *[!0-9a-fA-F]*) return 1 ;; esac
+    [ $((0x$_eff & 2)) -ne 0 ]
+}
+
+# The deepest part of $1 that exists: whose directory refused us.
+nearest_existing() {
+    _p=$1
+    while [ ! -e "$_p" ] && [ "$_p" != / ]; do
+        _p=$(dirname "$_p")
+    done
+    printf '%s\n' "$_p"
+}
+
+refuse_unwritable() {
+    _dir=$1 _reason=$2
+    _at=$(nearest_existing "$_dir")
+    _owner=$(stat -c '%u:%g' "$_at" 2>/dev/null) || _owner='?'
+    _mode=$(stat -c '%a' "$_at" 2>/dev/null) || _mode='?'
+    _root_capless=no
+    [ "$_uid" -eq 0 ] && ! has_dac_override && _root_capless=yes
+    {
+        echo "entrypoint: cannot write to the volume at $HOME, where MoonlightWeb keeps"
+        echo "its settings, certificate and paired hosts. Not starting."
+        echo
+        echo "  needed      $_dir"
+        echo "  found       $_at  owner $_owner  mode $_mode"
+        echo "  error       ${_reason:-not writable}"
+        if [ "$_root_capless" = yes ]; then
+            echo "  running as  uid 0, gid $_gid, without CAP_DAC_OVERRIDE (cap_drop: ALL):"
+            echo "              root can only write where uid 0 or gid $_gid is allowed to"
+        else
+            echo "  running as  uid $_uid, gid $_gid"
+        fi
+        echo
+        case "$_reason" in
+            *Read-only*)
+                echo "The mount itself is read-only: remove :ro (or read_only: true) from"
+                echo "the $HOME volume. If that is not it, see below."
+                echo
+                ;;
+        esac
+        echo "Fix one of these on the Docker host, then start the container again:"
+        echo
+        echo "  1. Give the directory to the user the container runs as:"
+        echo "       sudo chown -R $_uid:$_gid <host directory mounted at $HOME>"
+        echo "       sudo chmod -R u+rwX <host directory mounted at $HOME>"
+        case "$_owner" in
+            "$_uid:"* | '?' | 0:*) ;;
+            *)
+                echo "  2. Run the container as the directory's owner instead:"
+                echo "       docker run --user $_owner ...      compose: user: \"$_owner\""
+                echo "     (on the host network a user other than root cannot bind 80/443,"
+                echo "     even with NET_BIND_SERVICE: set MW_HTTP_PORT=8080, MW_HTTPS_PORT=8443)"
+                ;;
+        esac
+        if [ "$_root_capless" = yes ]; then
+            echo "  3. Give root back the right to override file permissions:"
+            echo "       docker run --cap-add DAC_OVERRIDE ..."
+            echo "       compose: cap_add: [NET_BIND_SERVICE, DAC_OVERRIDE]"
+        fi
+        echo
+        echo "See \"Volume permissions\" in docker/README.md."
+    } >&2
+    exit 1
+}
+
+for _dir in "$DATA" "$HOME/.config/MoonlightWeb"; do
+    probe_dir "$_dir" || refuse_unwritable "$_dir" "$_why"
+done
+# What a previous run left below them (cert/, logs/, …) counts too: a backup
+# restored as another user would otherwise pass here and fail mid-start.
+_bad=$(find "$HOME/.local/share/MoonlightWeb" "$HOME/.config/MoonlightWeb" \
+    -mindepth 1 -type d ! -writable -print 2>/dev/null | head -n 1)
+if [ -n "$_bad" ]; then
+    probe_dir "$_bad" || true
+    refuse_unwritable "$_bad" "$_why"
+fi
+
+# Qt's runtime directory is on the image's own filesystem, not the volume: a
+# read-only root filesystem needs a tmpfs on /tmp for it.
+if ! probe_dir "$XDG_RUNTIME_DIR" || ! chmod 700 "$XDG_RUNTIME_DIR" 2>/dev/null; then
+    {
+        echo "entrypoint: cannot prepare $XDG_RUNTIME_DIR (${_why:-chmod failed}),"
+        echo "running as uid $_uid, gid $_gid. Not starting."
+        echo
+        echo "With a read-only root filesystem, give the container a writable /tmp:"
+        echo "  docker run --read-only --tmpfs /tmp ...      compose: tmpfs: [/tmp]"
+    } >&2
+    exit 1
+fi
 
 # ── Settings that must be decided before the listeners bind ──────────────────
 # Everything else is configured from the admin page or by editing settings.json
