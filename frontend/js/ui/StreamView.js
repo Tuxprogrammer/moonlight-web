@@ -12661,6 +12661,10 @@ export class StreamView {
             onOpen: () => this._onClipboardPanelOpen(),
             onClose: () => this._onClipboardPanelClose(),
             toast: Toast,
+            // Type on host's 'auto' method: key presses where text may be
+            // mangled (StreamViewKeyboard._sendTextInput warns about the same).
+            hostOs: () => this.host?.hostOs || '',
+            nativeHost: () => !!this._nativeHost,
         });
         if (this._clipboardEnabled) this._clipboardPanel.setSyncAvailable(true);
         const btn = document.createElement('button');

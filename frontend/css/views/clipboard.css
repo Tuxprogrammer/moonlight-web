@@ -74,6 +74,15 @@
     border-left-color: var(--neon-magenta);
 }
 
+/* How Type on host types: key presses or Unicode text (clipboard_type_method). */
+.clipboard-panel-method {
+    margin: -6px 0 0;
+    padding: 0 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    color: var(--text-3);
+}
+
 .clipboard-panel-label {
     font-size: 11px;
     letter-spacing: 0.08em;
@@ -87,7 +96,12 @@
     width: 100%;
     padding: 10px;
     resize: none;
-    font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font:
+        14px/1.45 ui-monospace,
+        SFMono-Regular,
+        Menlo,
+        Consolas,
+        monospace;
     color: var(--text-1);
     background: var(--surface-0);
     border: 1px solid var(--border-1);
