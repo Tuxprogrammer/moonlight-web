@@ -134,6 +134,19 @@ public:
 
     QString domain() const { return m_Certs.domain(); }
 
+    /// The reverse proxies whose forwarding headers are believed
+    /// (trusted_proxies). Changes apply to the next request; an empty list is
+    /// the behaviour of an install without one. Bookkeeping only: see
+    /// ClientAddress.h for what it never touches.
+    void setTrustedProxies(const ClientAddress::TrustedProxies& proxies)
+    {
+        m_ConnGuard.setTrustedProxies(proxies);
+    }
+    const ClientAddress::TrustedProxies& trustedProxies() const
+    {
+        return m_ConnGuard.trustedProxies();
+    }
+
     /// Check whether a client address (from peerAddress()) is localhost
     /// or a loopback address (127.0.0.1, ::1, or any loopback).
     static bool isLocalRequest(const QString& addr);

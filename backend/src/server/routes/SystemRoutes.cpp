@@ -325,7 +325,7 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         }
 
         QString token =
-            authManager.createSession(req.clientAddress,
+            authManager.createSession(req.source(),
                                       req.viaTunnel ? QStringLiteral("Host machine (remote link)")
                                                     : QStringLiteral("Host machine"),
                                       true, false, req.viaTunnel);
@@ -1104,6 +1104,11 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         obj["debug_mode_cli"] = mw::run::debugFromCli();
         obj["verbose_logs"] = mw::run::verbose();
         obj["verbose_logs_cli"] = mw::run::verboseFromCli();
+        // The reverse proxies whose forwarding headers are believed. Locked
+        // when MW_TRUSTED_PROXIES sets them: the page shows them read-only.
+        obj["trusted_proxies"] = QJsonArray::fromStringList(appSettings.trustedProxies());
+        obj["trusted_proxies_env"] = appSettings.trustedProxiesFromEnvironment();
+        obj["trusted_proxies_max"] = ClientAddress::kMaxTrustedProxies;
         // Host machine only: the current host key, so the
         // admin page can carry its session over to the
         // public-domain URL after Internet activation. Not
@@ -1125,6 +1130,42 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         QJsonObject body = doc.object();
         bool hadChange = false;
         QJsonObject obj;
+
+        // ── Trusted reverse proxies ──────────────────────────────────────
+        // First, so a refused list leaves every other field of the request
+        // unapplied. An array of strings, or one string split on commas and
+        // spaces; validated whole, stored canonical, echoed back, and applied
+        // to the next request.
+        if (body.contains("trusted_proxies")) {
+            if (appSettings.trustedProxiesFromEnvironment()) {
+                QJsonObject err;
+                err["error"] = "set_by_environment";
+                return HttpResponse::json(err, 409);
+            }
+            const QJsonValue v = body.value("trusted_proxies");
+            QStringList entries;
+            bool shapeOk = v.isArray() || v.isString();
+            if (v.isString()) entries = ClientAddress::splitList(v.toString());
+            for (const QJsonValue& e : v.toArray()) {
+                if (!e.isString()) shapeOk = false;
+                entries.append(e.toString());
+            }
+            QStringList invalid;
+            if (!shapeOk || !appSettings.setTrustedProxies(entries, &invalid)) {
+                QJsonObject err;
+                err["error"] = "invalid_trusted_proxies";
+                err["invalid"] = QJsonArray::fromStringList(invalid);
+                err["max"] = ClientAddress::kMaxTrustedProxies;
+                return HttpResponse::json(err, 400);
+            }
+            server.setTrustedProxies(appSettings.trustedProxyList());
+            const QStringList now = appSettings.trustedProxies();
+            Logger::info(
+                QStringLiteral("Trusted proxies set from the admin page: %1")
+                    .arg(now.isEmpty() ? QStringLiteral("none") : now.join(QStringLiteral(", "))));
+            obj["trusted_proxies"] = QJsonArray::fromStringList(now);
+            hadChange = true;
+        }
 
         // ── Certificate authentication toggle ────────────────────────────
         if (body.contains("cert_auth_enabled")) {

@@ -13,8 +13,11 @@
  */
 #include "test_framework.h"
 
+#include "server/ClientAddress.h"
 #include "server/HttpParser.h"
 #include "server/RequestGuard.h"
+
+#include <QHostAddress>
 
 namespace {
 
@@ -53,10 +56,8 @@ QByteArray wire(const char* requestLine, std::initializer_list<const char*> head
     return raw;
 }
 
-Reply serve(const QByteArray& raw, const Caller& caller = {})
+Reply serveRequest(const HttpRequest& req, const Caller& caller)
 {
-    const HttpRequest req = HttpParser::parse(raw);
-
     RequestGuard::Context ctx;
     ctx.peerLocal = caller.peerLocal;
     ctx.hostSession = caller.hostSession;
@@ -67,6 +68,31 @@ Reply serve(const QByteArray& raw, const Caller& caller = {})
     const RequestGuard::Decision d = RequestGuard::evaluate(RequestGuard::describe(req), ctx);
     return {RequestGuard::blockStatus(d.outcome), RequestGuard::blockError(d.outcome),
             d.localPrivilege, d.adminPrivilege};
+}
+
+Reply serve(const QByteArray& raw, const Caller& caller = {})
+{
+    return serveRequest(HttpParser::parse(raw), caller);
+}
+
+/// A request off the wire from @p peer, stamped the way HttpServer does it,
+/// with peerLocal judged from the privilege address alone (loopback stands in
+/// for HttpServer::isLocalRequest, which also knows our own interfaces).
+struct Arrived
+{
+    HttpRequest req;
+    Caller caller;
+};
+
+Arrived arrive(const QByteArray& raw, const QString& peer,
+               const ClientAddress::TrustedProxies& trusted)
+{
+    Arrived a;
+    a.req = HttpParser::parse(raw);
+    a.req.clientAddress = peer;
+    ClientAddress::stamp(a.req, trusted);
+    a.caller.peerLocal = QHostAddress(RequestGuard::privilegeAddress(a.req)).isLoopback();
+    return a;
 }
 
 const QByteArray kJson = QByteArrayLiteral("{\"address\":\"192.168.1.20\"}");
@@ -299,4 +325,97 @@ void run_api_csrf_tests()
               stranger);
     CHECK(!anon.localPrivilege);
     CHECK(!anon.adminPrivilege);
+
+    SECTION("API CSRF — a forwarded address grants nothing (trusted_proxies)");
+    {
+        const ClientAddress::TrustedProxies lanProxy = ClientAddress::parseList({"192.0.2.10"});
+        const ClientAddress::TrustedProxies loProxy = ClientAddress::parseList({"127.0.0.1"});
+
+        // A client behind a trusted LAN proxy claims to be the host machine.
+        // The bookkeeping believes the proxy; privilege reads the peer.
+        const QByteArray claim =
+            wire("POST /api/auth/regenerate HTTP/1.1",
+                 {"Host: localhost", "Sec-Fetch-Site: same-origin", "X-Forwarded-For: 127.0.0.1"});
+        Arrived a = arrive(claim, "192.0.2.10", lanProxy);
+        CHECK_EQ(a.req.source(), QString("127.0.0.1"));
+        CHECK_EQ(RequestGuard::privilegeAddress(a.req), QString("192.0.2.10"));
+        CHECK(!a.caller.peerLocal);
+        Reply r = serveRequest(a.req, a.caller);
+        CHECK(!r.localPrivilege);
+        CHECK(!r.adminPrivilege);
+        // Same answer with the header gone, and with the list empty.
+        CHECK(!serveRequest(arrive(claim, "192.0.2.10", {}).req, a.caller).localPrivilege);
+
+        // Forwarded headers through Forwarded, IPv6 loopback, a mapped form:
+        // none moves the privilege address.
+        for (const char* h : {"Forwarded: for=127.0.0.1", "Forwarded: for=\"[::1]\"",
+                              "X-Forwarded-For: ::1", "X-Forwarded-For: ::ffff:127.0.0.1"}) {
+            a = arrive(wire("GET /api/auth/sessions HTTP/1.1", {"Host: localhost", h}),
+                       "192.0.2.10", lanProxy);
+            CHECK(QHostAddress(a.req.source()).isLoopback());
+            CHECK_EQ(RequestGuard::privilegeAddress(a.req), QString("192.0.2.10"));
+            CHECK(!serveRequest(a.req, a.caller).adminPrivilege);
+        }
+
+        // stamp() writes the two bookkeeping fields and nothing else.
+        HttpRequest before = HttpParser::parse(claim);
+        before.clientAddress = QStringLiteral("192.0.2.10");
+        before.isLocal = false;
+        before.hostTrusted = true;
+        HttpRequest after = before;
+        ClientAddress::stamp(after, lanProxy);
+        CHECK_EQ(after.clientAddress, before.clientAddress);
+        CHECK_EQ(after.isLocal, before.isLocal);
+        CHECK_EQ(after.isHostMachine, before.isHostMachine);
+        CHECK_EQ(after.hostTrusted, before.hostTrusted);
+        CHECK_EQ(after.viaTunnel, before.viaTunnel);
+        CHECK(after.headers == before.headers);
+        // The guard reads the same request either way.
+        const RequestGuard::Request d1 = RequestGuard::describe(before);
+        const RequestGuard::Request d2 = RequestGuard::describe(after);
+        CHECK_EQ(d1.method, d2.method);
+        CHECK_EQ(d1.path, d2.path);
+        CHECK(d1.headers == d2.headers);
+        CHECK_EQ(d1.bodySize, d2.bodySize);
+
+        // A loopback proxy in the list: the host machine behind it keeps what it
+        // had (loopback peer + a local Host), and a public client forwarded by
+        // it keeps nothing extra — the public name it reaches us under is not a
+        // local Host, exactly as without trusted_proxies.
+        a = arrive(wire("GET /api/auth/sessions HTTP/1.1",
+                        {"Host: localhost", "X-Forwarded-For: 203.0.113.9"}),
+                   "127.0.0.1", loProxy);
+        CHECK_EQ(a.req.source(), QString("203.0.113.9"));
+        CHECK(a.caller.peerLocal);
+        CHECK_EQ(
+            serveRequest(a.req, a.caller).adminPrivilege,
+            serve(wire("GET /api/auth/sessions HTTP/1.1", {"Host: localhost"})).adminPrivilege);
+        a = arrive(wire("GET /api/auth/sessions HTTP/1.1",
+                        {"Host: proxy.example", "X-Forwarded-For: 203.0.113.9"}),
+                   "127.0.0.1", loProxy);
+        r = serveRequest(a.req, a.caller);
+        CHECK(!r.localPrivilege);
+        CHECK(!r.adminPrivilege);
+
+        // A spoofed header from a peer that is not a trusted proxy is not even
+        // bookkept.
+        a = arrive(claim, "198.51.100.77", lanProxy);
+        CHECK_EQ(a.req.source(), QString("198.51.100.77"));
+        CHECK_EQ(a.req.attemptAddress, QString("198.51.100.77"));
+        CHECK(!serveRequest(a.req, a.caller).localPrivilege);
+
+        // The tunnel never reads headers, whatever the list says.
+        HttpRequest t = HttpParser::parse(claim);
+        t.clientAddress = QStringLiteral("192.0.2.10");
+        ClientAddress::stamp(t, lanProxy, true);
+        CHECK_EQ(t.source(), QString("192.0.2.10"));
+
+        // An unstamped request (a route called directly) reads as its peer.
+        HttpRequest bare;
+        bare.clientAddress = QStringLiteral("198.51.100.5");
+        CHECK_EQ(bare.source(), QString("198.51.100.5"));
+        CHECK_EQ(ClientAddress::describe(bare), QString("198.51.100.5"));
+        CHECK_EQ(ClientAddress::describe(arrive(claim, "192.0.2.10", lanProxy).req),
+                 QString("127.0.0.1 via 192.0.2.10"));
+    }
 }

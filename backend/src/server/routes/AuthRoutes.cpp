@@ -116,12 +116,11 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             if (authManager.validateCertificate(certificate)) {
                 // Certificate valid — create session (same flow as PIN success)
                 QString token =
-                    authManager.createSession(req.clientAddress, machineName, false, !remember);
-                geoIpService.lookupIp(
-                    req.clientAddress,
-                    [&authManager, token](const QString& city, const QString& country) {
-                        authManager.setSessionGeo(token, city, country);
-                    });
+                    authManager.createSession(req.source(), machineName, false, !remember);
+                geoIpService.lookupIp(req.source(), [&authManager, token](const QString& city,
+                                                                          const QString& country) {
+                    authManager.setSessionGeo(token, city, country);
+                });
 
                 QJsonObject obj;
                 obj["status"] = "ok";
@@ -143,22 +142,20 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         // ── PIN validation (default path) ──────────────────────────────
         if (pin.isEmpty()) return HttpResponse::error(400, "Missing 'pin' field");
 
-        // Counted against the socket peer, or the visitor a local reverse proxy
-        // names (AuthManager::attemptAddress).
-        auto result = authManager.validatePin(
-            AuthManager::attemptAddress(req.clientAddress, req.headers), pin);
+        // Counted against the socket peer, or the visitor a reverse proxy names
+        // (AuthManager::attemptAddress, ClientAddress::resolve).
+        auto result = authManager.validatePin(AuthManager::attemptAddress(req), pin);
 
         QJsonObject obj;
         switch (result.result) {
         case AuthManager::Valid: {
-            QString token =
-                authManager.createSession(req.clientAddress, machineName, false, !remember);
+            QString token = authManager.createSession(req.source(), machineName, false, !remember);
 
             // Look up the IP geolocation asynchronously and store in the session
-            geoIpService.lookupIp(req.clientAddress, [&authManager, token](const QString& city,
-                                                                           const QString& country) {
-                authManager.setSessionGeo(token, city, country);
-            });
+            geoIpService.lookupIp(
+                req.source(), [&authManager, token](const QString& city, const QString& country) {
+                    authManager.setSessionGeo(token, city, country);
+                });
 
             // Auto-regenerate PIN — immediately invalidate the just-used PIN
             authManager.autoRegeneratePin();
@@ -204,16 +201,16 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         const std::optional<AuthManager::HomeScreenHandoff> handoff =
             req.viaTunnel ? authManager.redeemHomeScreenKey(key) : std::nullopt;
         if (!handoff) {
-            server.reportAuthFailure(req.clientAddress);
+            server.reportAuthFailure(req.source());
             Logger::warning(QStringLiteral("[Auth] Home-screen key refused for %1")
-                                .arg(AuthManager::cleanClientAddress(req.clientAddress)));
+                                .arg(AuthManager::cleanClientAddress(req.source())));
             return HttpResponse::error(403, "This shortcut's key is spent or expired");
         }
 
         QString machineName = body.value(QStringLiteral("machine_name")).toString().trimmed();
         if (machineName.isEmpty()) machineName = handoff->machineName;
-        const QString token = authManager.createSession(req.clientAddress, machineName);
-        geoIpService.lookupIp(req.clientAddress,
+        const QString token = authManager.createSession(req.source(), machineName);
+        geoIpService.lookupIp(req.source(),
                               [&authManager, token](const QString& city, const QString& country) {
                                   authManager.setSessionGeo(token, city, country);
                               });
@@ -408,7 +405,10 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         }
 
         const QString password = QJsonDocument::fromJson(req.body).object()["password"].toString();
-        const auto result = authManager.validateAdminPassword(req.clientAddress, password);
+        // Counted against the client a trusted proxy names (its own bucket, and
+        // the internet's when it is outside the LAN); the door above judged the
+        // peer.
+        const auto result = authManager.validateAdminPassword(req.source(), password);
 
         QJsonObject obj;
         switch (result.result) {
@@ -523,11 +523,10 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
                             authManager.touchSession(token);
                             // Reconnection: refresh source IP and re-run
                             // geolocation if it changed since last seen.
-                            if (authManager.updateSessionAddress(token, req.clientAddress)) {
+                            if (authManager.updateSessionAddress(token, req.source())) {
                                 geoIpService.lookupIp(
-                                    req.clientAddress,
-                                    [&authManager, token](const QString& city,
-                                                          const QString& country) {
+                                    req.source(), [&authManager, token](const QString& city,
+                                                                        const QString& country) {
                                         authManager.setSessionGeo(token, city, country);
                                     });
                             }
@@ -538,10 +537,8 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
             }
             obj["authenticated"] = auth;
             if (!auth) {
-                obj["remaining"] = authManager.remainingAttempts(
-                    AuthManager::attemptAddress(req.clientAddress, req.headers));
-                int lockoutSecs = authManager.lockoutSeconds(
-                    AuthManager::attemptAddress(req.clientAddress, req.headers));
+                obj["remaining"] = authManager.remainingAttempts(AuthManager::attemptAddress(req));
+                int lockoutSecs = authManager.lockoutSeconds(AuthManager::attemptAddress(req));
                 if (lockoutSecs > 0) obj["lockout_seconds"] = lockoutSecs;
             }
         }

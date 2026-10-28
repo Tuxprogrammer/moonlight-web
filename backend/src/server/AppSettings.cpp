@@ -391,6 +391,10 @@ void AppSettings::seedDocumentedDefaults()
         obj["share_guests_admin_windows"] = false;
         changed = true;
     }
+    if (!obj.contains("trusted_proxies")) {
+        obj["trusted_proxies"] = QJsonArray();
+        changed = true;
+    }
     if (!obj.contains("share_in_booth_mode")) {
         obj["share_in_booth_mode"] = false;
         changed = true;
@@ -702,6 +706,51 @@ bool AppSettings::shareGuestsAdminWindows() const
     // Only a real true opens them: a value someone typed as "true" (a string)
     // or 1 is not a decision to make a stranger administrator.
     return obj.value("share_guests_admin_windows").toBool(false);
+}
+
+// ── Trusted reverse proxies ──────────────────────────────────────────────────
+
+bool AppSettings::trustedProxiesFromEnvironment() const
+{
+    return !qEnvironmentVariable(kTrustedProxiesEnv).trimmed().isEmpty();
+}
+
+QStringList AppSettings::trustedProxies() const
+{
+    if (trustedProxiesFromEnvironment())
+        return ClientAddress::splitList(qEnvironmentVariable(kTrustedProxiesEnv));
+    QStringList out;
+    for (const QJsonValue& v : readAll().value("trusted_proxies").toArray())
+        if (v.isString()) out.append(v.toString().trimmed());
+    return out;
+}
+
+ClientAddress::TrustedProxies AppSettings::trustedProxyList() const
+{
+    QStringList invalid;
+    const ClientAddress::TrustedProxies list = ClientAddress::parseList(trustedProxies(), &invalid);
+    if (!invalid.isEmpty())
+        Logger::warning(QString("trusted_proxies: ignoring %1 (%2)")
+                            .arg(invalid.join(QStringLiteral(", ")), trustedProxiesFromEnvironment()
+                                                                         ? kTrustedProxiesEnv
+                                                                         : "settings.json"));
+    return list;
+}
+
+bool AppSettings::setTrustedProxies(const QStringList& entries, QStringList* invalid)
+{
+    QStringList refused;
+    const ClientAddress::TrustedProxies list = ClientAddress::parseList(entries, &refused);
+    if (invalid) *invalid = refused;
+    if (!refused.isEmpty()) return false;
+
+    QJsonArray arr;
+    for (const QString& e : ClientAddress::toStrings(list))
+        arr.append(e);
+    QJsonObject obj = readAll();
+    obj["trusted_proxies"] = arr;
+    writeAll(obj);
+    return true;
 }
 
 bool AppSettings::shareInBoothMode() const
