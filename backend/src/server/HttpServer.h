@@ -296,9 +296,11 @@ private:
     void stopIdleClose(QTcpSocket* socket);
     void handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArray& requestData);
     /// Hand the upgraded connection to the local WebSocket server on
-    /// @p targetPort, both ways, until either side closes.
+    /// @p targetPort, both ways, until either side closes. @p stateSlot is the
+    /// stream slot whose worker may still be starting (retried), -1 for an
+    /// in-process server; @p path only labels the log lines.
     void proxyWebSocket(QTcpSocket* clientSocket, const QByteArray& requestData,
-                        quint16 targetPort);
+                        quint16 targetPort, int stateSlot, const QString& path);
     bool isLanHost(const QString& host) const;
 
     /// Push CertManager's public config onto the live SslServer as its public

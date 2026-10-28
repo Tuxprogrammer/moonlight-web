@@ -1543,7 +1543,8 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
             sendResponse(clientSocket, HttpResponse::json(obj, 401));
             return;
         }
-        proxyWebSocket(clientSocket, requestData, m_ClipboardAgentPort);
+        proxyWebSocket(clientSocket, requestData, m_ClipboardAgentPort, -1,
+                       QStringLiteral("/ws/clipboard-agent"));
         return;
     }
 
@@ -1634,11 +1635,12 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
     qInfo() << "[HttpServer] WebSocket upgrade detected, path=" << path
             << "targetPort=" << targetPort;
 
-    proxyWebSocket(clientSocket, requestData, targetPort);
+    proxyWebSocket(clientSocket, requestData, targetPort,
+                   path == QLatin1String("/ws/control") ? -1 : wsSlot, path);
 }
 
 void HttpServer::proxyWebSocket(QTcpSocket* clientSocket, const QByteArray& requestData,
-                                quint16 targetPort)
+                                quint16 targetPort, int stateSlot, const QString& path)
 {
     // Copy the upgrade request BEFORE removing from m_Buffers.  requestData is a
     // const reference to the QByteArray inside m_Buffers — remove() destroys it.
@@ -1692,9 +1694,9 @@ void HttpServer::proxyWebSocket(QTcpSocket* clientSocket, const QByteArray& requ
     // being replaced on the same port by a relaunch). A connect that cannot
     // succeed is answered with a real status BEFORE the upgrade — 503 +
     // Retry-After, or 404 — instead of a closed socket that a proxy in front
-    // turns into a 502 of its own. The control channel is in-process: a
-    // refusal there is not a worker starting, so it is not retried.
-    const int stateSlot = path == QLatin1String("/ws/control") ? -1 : wsSlot;
+    // turns into a 502 of its own. The control channel and the clipboard agents
+    // are in-process (stateSlot -1): a refusal there is not a worker starting,
+    // so it is not retried.
     auto slotState = [this, stateSlot]() {
         if (stateSlot < 0 || !m_SlotState) return wsproxy::SlotState::Idle;
         return m_SlotState(stateSlot);
