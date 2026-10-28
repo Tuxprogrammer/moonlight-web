@@ -1104,9 +1104,12 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
         obj["debug_mode_cli"] = mw::run::debugFromCli();
         obj["verbose_logs"] = mw::run::verbose();
         obj["verbose_logs_cli"] = mw::run::verboseFromCli();
-        // The reverse proxies whose forwarding headers are believed. Locked
-        // when MW_TRUSTED_PROXIES sets them: the page shows them read-only.
-        obj["trusted_proxies"] = QJsonArray::fromStringList(appSettings.trustedProxies());
+        // The reverse proxies whose forwarding headers are believed, as in
+        // force (canonical; an entry that did not parse is not in force).
+        // Locked when MW_TRUSTED_PROXIES sets them: the page shows them
+        // read-only.
+        obj["trusted_proxies"] =
+            QJsonArray::fromStringList(ClientAddress::toStrings(server.trustedProxies()));
         obj["trusted_proxies_env"] = appSettings.trustedProxiesFromEnvironment();
         obj["trusted_proxies_max"] = ClientAddress::kMaxTrustedProxies;
         // Host machine only: the current host key, so the
@@ -1159,7 +1162,7 @@ void registerSystemRoutes(HttpServer& server, AppSettings& appSettings, AuthMana
                 return HttpResponse::json(err, 400);
             }
             server.setTrustedProxies(appSettings.trustedProxyList());
-            const QStringList now = appSettings.trustedProxies();
+            const QStringList now = ClientAddress::toStrings(server.trustedProxies());
             Logger::info(
                 QStringLiteral("Trusted proxies set from the admin page: %1")
                     .arg(now.isEmpty() ? QStringLiteral("none") : now.join(QStringLiteral(", "))));
