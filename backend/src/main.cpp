@@ -87,6 +87,8 @@
 #include "server/ClipboardAgentRegistry.h"
 #include "server/ClipboardAgentRouter.h"
 #include "server/ClipboardAgentServer.h"
+#include "clipboard/ClipboardIpc.h"
+#include "clipboard/ClipboardRoute.h"
 #include "server/routes/HostAppRoutes.h"
 #include "server/routes/ShareRoutes.h"
 #include "server/routes/SystemRoutes.h"
@@ -101,6 +103,7 @@
 #include "backend/SunshineInstaller.h"
 #include "Autostart.h"
 #include "streaming/Session.h"
+#include "streaming/ClipboardBridge.h"
 #include "streaming/IMediaEngine.h"
 #include "streaming/NativeBench.h"
 #include "backend/streambackend/NativeProbeService.h"
@@ -2954,6 +2957,22 @@ int main(int argc, char* argv[])
                          clipboardRouter.onAgentText(host, text);
                      });
     registerClipboardAgentRoutes(server, computerManager, clipboardAgents);
+    // A stream worker that may use its host's agent is joined to it until it
+    // ends. Only ever the owner's own session: see ClipboardRoute.
+    auto attachClipboardAgent = [&clipboardRouter](StreamWorkerHost* worker, const QString& host) {
+        QPointer<StreamWorkerHost> guard(worker);
+        const int handle = clipboardRouter.attach(host, [guard](const QJsonObject& command) {
+            if (guard) guard->sendClipboardCommand(command);
+        });
+        QObject::connect(worker, &StreamWorkerHost::clipboardEvent, qApp,
+                         [&clipboardRouter, handle](const QJsonObject& event) {
+                             clipboardRouter.onWorkerEvent(handle, event);
+                         });
+        QObject::connect(worker, &StreamWorkerHost::ended, qApp,
+                         [&clipboardRouter, handle]() { clipboardRouter.detach(handle); });
+        QObject::connect(worker, &QObject::destroyed, qApp,
+                         [&clipboardRouter, handle]() { clipboardRouter.detach(handle); });
+    };
     registerHostAppRoutes(server, appSettings);
     // The game launchers installed on this PC get a card each, the first start
     // after an install or an update (as Sunshine's installer gives Steam one).
@@ -2988,6 +3007,7 @@ int main(int argc, char* argv[])
                                                         &slotWsPath, &anyOtherSlotLive,
                                                         &reapCoopSession, &server, &appSettings,
                                                         &authManager, &sessionMetrics, &routerPorts,
+                                                        &clipboardRouter, &attachClipboardAgent,
                                                         stunServer](const HttpRequest& req,
                                                                     ResponseCallback respond) {
         QString uuid = req.pathParams.value("id");
@@ -3993,6 +4013,12 @@ int main(int argc, char* argv[])
             // which the old test (admin privilege: loopback, host key or LAN
             // admin password) left staring at the "minimize" warning.
             cfg["viewerAdmin"] = true;
+            // The host's clipboard through its agent, when the host is not
+            // this machine (ClipboardRoute): the worker gets a remote provider,
+            // usable while the agent is enabled and connected.
+            if (ClipboardRoute::mayUseAgent(
+                    ClipboardBridge::isSelfAddress(host->activeAddress.address()), true, false))
+                cfg["clipboardAgent"] = clipboardRouter.isAvailable(host->uuid);
             // The consent the desktop portal already gave this installation.
             // Empty on every machine that reads its own scanout — which is all
             // of them but a Linux host with no capability (an AppImage).
@@ -4413,7 +4439,7 @@ int main(int argc, char* argv[])
                                        NativeHostBackend::usesVirtualDisplay(appId);
             auto startWorker = [worker, respond, standby, reqSlot, appId, &g_Pool,
                                 &g_LastStandbyStartMs, hostUuidCopy, uid, sessionToken,
-                                virtualStream](QJsonObject cfg) {
+                                virtualStream, &attachClipboardAgent](QJsonObject cfg) {
                 // On our virtual display: the display it took the primary role
                 // from, which turning it on (below) has just recorded in this
                 // settings file — a SYSTEM worker does not read it.
@@ -4435,6 +4461,9 @@ int main(int argc, char* argv[])
                     }
                     return;
                 }
+                // Its host clipboard through the host's agent, from now on.
+                if (cfg.contains(QStringLiteral("clipboardAgent")))
+                    attachClipboardAgent(worker, hostUuidCopy);
                 SessionPool::Slot& sl = g_Pool.at(reqSlot);
                 sl.worker = worker;
                 sl.clientUniqueId = uid;

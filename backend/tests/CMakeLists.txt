@@ -120,13 +120,19 @@ add_executable(run_tests
     test_cert_manager.cpp
     test_clipboard_agent_server.cpp
     test_clipboard_agent_tokens.cpp
+    test_clipboard_provider.cpp
     # In-scope production units (+ their real deps)
     # The host clipboard through an agent on the streamed host: the protocol,
-    # the server's registry, socket and router.
+    # the server's registry, socket and router, the worker's provider and the
+    # relays' shared end.
     ${_src}/src/clipboard/ClipboardAgentProtocol.cpp
     ${_src}/src/server/ClipboardAgentRegistry.cpp
     ${_src}/src/server/ClipboardAgentServer.cpp
     ${_src}/src/server/ClipboardAgentRouter.cpp
+    ${_src}/src/streaming/IMediaEngine.h
+    ${_src}/src/streaming/ClipboardProvider.cpp
+    ${_src}/src/streaming/RemoteClipboardProvider.cpp
+    ${_src}/src/streaming/RelayClipboard.cpp
     # The router-port allocation policy, behind its gateway seam: the rules
     # that keep two MoonlightWeb hosts on one LAN out of each other's holes.
     ${_src}/src/network/RouterPortCore.cpp

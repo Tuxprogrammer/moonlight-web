@@ -22,6 +22,7 @@
 #include "NativeBench.h"
 #include "StreamEnds.h"
 #include "WorkerService.h"
+#include "clipboard/ClipboardIpc.h"
 #include "common/Edition.h"
 #include "common/LinuxCapabilities.h"
 #include "common/RunFlags.h"
@@ -442,6 +443,8 @@ void StreamWorkerHost::onStdoutData(const QByteArray& data)
         } else if (type == QLatin1String("mouseKeys")) {
             m_MouseKeysHeld = event["on"].toBool();
             m_MouseKeysSaved = m_MouseKeysHeld ? event["saved"].toObject() : QJsonObject();
+        } else if (ClipboardIpc::isEvent(type)) {
+            emit clipboardEvent(event);
         } else if (!line.trimmed().isEmpty()) {
             qWarning() << "[StreamWorkerHost] Unknown worker event:" << line.constData();
         }

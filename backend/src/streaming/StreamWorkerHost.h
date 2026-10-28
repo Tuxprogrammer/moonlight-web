@@ -99,6 +99,10 @@ public:
     /// {"cmd":"codec","codec":"h264"}). Fire-and-forget, like the policy.
     void sendControl(const QJsonObject& command) { sendJson(command); }
 
+    /// The host clipboard agent's side of this worker's session
+    /// (clipboard/ClipboardIpc.h). Fire-and-forget, like the policy.
+    void sendClipboardCommand(const QJsonObject& command) { sendJson(command); }
+
     bool isRunning() const;
 
     /// Whether the child went without saying its session was over and without
@@ -138,6 +142,10 @@ signals:
     /// when there was enough dense content to judge. Persisted by the
     /// supervisor, like the portal's grant.
     void captureHoldReceived(const QJsonObject& verdict);
+    /// The worker wants to write to, or read, the host clipboard through the
+    /// host's agent (a ClipboardIpc event, as it came). Never logged: it
+    /// carries clipboard text.
+    void clipboardEvent(const QJsonObject& event);
     /// The child process fully exited (ports are certainly free) — exactly
     /// once, always after ended(). Serialization barrier for slot reuse.
     void exited();

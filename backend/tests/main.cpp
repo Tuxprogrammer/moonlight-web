@@ -80,6 +80,7 @@ void run_feed_ipc_tests();
 void run_cert_manager_tests();
 void run_clipboard_agent_server_tests();
 void run_clipboard_agent_token_tests();
+void run_clipboard_provider_tests();
 void run_clipboard_message_tests();
 
 int main(int argc, char** argv)
@@ -157,6 +158,7 @@ int main(int argc, char** argv)
     run_cert_manager_tests();
     run_clipboard_agent_server_tests();
     run_clipboard_agent_token_tests();
+    run_clipboard_provider_tests();
     // Last: it repoints the Logger singleton at its own temp files.
     run_logger_rotation_tests();
 

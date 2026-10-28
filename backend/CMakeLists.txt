@@ -383,6 +383,11 @@ add_executable(mw-server
     src/streaming/SharedFeed.cpp
     src/streaming/NativeBench.cpp
     src/streaming/ClipboardBridge.cpp
+    # Host clipboard sync behind one interface: this machine's (the bridge) or
+    # a remote host's agent, reached through the server (RemoteClipboardProvider).
+    src/streaming/ClipboardProvider.cpp
+    src/streaming/RelayClipboard.cpp
+    src/streaming/RemoteClipboardProvider.cpp
     # The host clipboard through an agent on a streamed host: its protocol,
     # its tokens, its sockets and the router to the stream workers.
     src/clipboard/ClipboardAgentProtocol.cpp
