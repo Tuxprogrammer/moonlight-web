@@ -34,6 +34,7 @@ import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
 import { refreshClientLog } from '../util/ClientLog.js';
 import { GamepadDriverNotice } from './GamepadDriverNotice.js';
+import { ALLOWED_TRANSPORTS } from '../util/TransportChoice.js';
 
 export class AdminView {
     // Backend statusJson "phase" values that mean activation is still running.
@@ -99,6 +100,8 @@ export class AdminView {
         this._uniqueId = '';
         this._transportMode = 'auto';
         this._availableTransports = [];
+        // allowed_transports: which families streams may use at all.
+        this._allowedTransports = 'all';
         this._upnpAvailable = false;
         // Off in settings.json: the router is never asked, which is not the
         // same thing as a router that did not answer.
@@ -313,6 +316,9 @@ export class AdminView {
             this._consentVersion = status.consent_version || 0;
             this._transportMode = status.transport_mode || 'auto';
             this._availableTransports = status.available_transports || [];
+            this._allowedTransports = ALLOWED_TRANSPORTS.includes(status.allowed_transports)
+                ? status.allowed_transports
+                : 'all';
             this._upnpAvailable = status.upnp_available || false;
             this._upnpEnabled = status.upnp_enabled !== false;
             this._customDomain = status.custom_domain === true;
@@ -706,42 +712,6 @@ export class AdminView {
         }
 
         this._sessionPage = 0;
-        const transportLabels = {
-            'webrtc-media-udp': 'WebRTC MediaTrack (UDP)',
-            'webrtc-dc-udp': 'WebRTC DataChannel (UDP)',
-            'webrtc-media-tcp': 'WebRTC MediaTrack (TCP)',
-            'webrtc-dc-tcp': 'WebRTC DataChannel (TCP)',
-            wss: 'WSS (WebSocket Secure)',
-        };
-        // wss carries video over the very TLS connection that served the page,
-        // so it only runs for a browser opened on the host's LAN IP directly —
-        // through the rendezvous the backend takes it out of the chain even when
-        // it is selected here. The server omits it from available_transports
-        // outside debug builds; when it does appear, the label says what it
-        // needs rather than letting the choice look unconditional.
-        // A mode already in settings.json that the server no longer offers (wss
-        // outside a debug build, or a hand-written value) is listed anyway:
-        // dropping it would leave the select showing "auto" while the saved
-        // setting says otherwise, and the next save would silently change it.
-        // transport_mode "all" is the auto chain with wss offered too: while wss
-        // is on the list, the Auto entry saves "all" so the list survives a save.
-        const offered = this._availableTransports.slice();
-        const autoValue = offered.includes('wss') ? 'all' : 'auto';
-        if (this._transportMode === 'all' || this._transportMode === 'auto') {
-            this._transportMode = autoValue;
-        } else if (!offered.includes(this._transportMode)) {
-            offered.push(this._transportMode);
-        }
-        const transportOptions = [
-            { value: autoValue, label: t('admin.transportAuto') },
-            ...offered.map((mode) => ({
-                value: mode,
-                label:
-                    mode === 'wss'
-                        ? `${transportLabels[mode] || mode} — ${t('admin.transportLanIpOnly')}`
-                        : transportLabels[mode] || mode,
-            })),
-        ];
 
         const domainUrl = this._buildDomainUrl();
         // Only a legacy instance (or a custom domain) has a public URL to show;
@@ -1126,22 +1096,7 @@ export class AdminView {
                         </p>
                     </div>
 
-                    <div class="settings-field">
-                        <label class="settings-label" for="select-transport-mode">
-                            ${t('admin.transportMode')}
-                        </label>
-                        <select id="select-transport-mode" class="settings-select">
-                            ${transportOptions
-                                .map(
-                                    (o) =>
-                                        `<option value="${o.value}" ${o.value === this._transportMode ? 'selected' : ''}>${this.esc(o.label)}</option>`,
-                                )
-                                .join('')}
-                        </select>
-                        <p class="settings-hint">
-                            ${t('admin.transportModeHint')}
-                        </p>
-                    </div>
+                    ${this._renderTransportFields()}
 
                     <div class="settings-field">
                         <label class="settings-label" for="admin-https-port">
@@ -1478,6 +1433,14 @@ export class AdminView {
                 } else {
                     await this._disableInternet();
                 }
+            });
+        }
+
+        // Allowed transports: saved as soon as it changes
+        const allowedSelect = this.container.querySelector('#select-allowed-transports');
+        if (allowedSelect) {
+            allowedSelect.addEventListener('change', () => {
+                void this._saveAllowedTransports(allowedSelect.value);
             });
         }
 
@@ -2232,6 +2195,94 @@ export class AdminView {
         }
     }
 
+    /**
+     * The transport fields: « Allowed transports » (the policy: which families
+     * streams may use at all) beside « Transport Mode » (the order inside it).
+     */
+    _renderTransportFields() {
+        const transportLabels = {
+            'webrtc-media-udp': 'WebRTC MediaTrack (UDP)',
+            'webrtc-dc-udp': 'WebRTC DataChannel (UDP)',
+            'webrtc-media-tcp': 'WebRTC MediaTrack (TCP)',
+            'webrtc-dc-tcp': 'WebRTC DataChannel (TCP)',
+            wss: 'WSS (WebSocket Secure)',
+        };
+        // wss carries video over the very TLS connection that served the page,
+        // so it only runs for a browser opened on the host's LAN IP directly —
+        // through the rendezvous the backend takes it out of the chain even when
+        // it is selected here. The server omits it from available_transports
+        // outside debug builds; when it does appear, the label says what it
+        // needs rather than letting the choice look unconditional.
+        // A mode already in settings.json that the server no longer offers (wss
+        // outside a debug build, or a hand-written value) is listed anyway:
+        // dropping it would leave the select showing "auto" while the saved
+        // setting says otherwise, and the next save would silently change it.
+        // transport_mode "all" is the auto chain with wss offered too: while wss
+        // is on the list, the Auto entry saves "all" so the list survives a save.
+        const offered = this._availableTransports.slice();
+        const autoValue = offered.includes('wss') ? 'all' : 'auto';
+        if (this._transportMode === 'all' || this._transportMode === 'auto') {
+            this._transportMode = autoValue;
+        } else if (!offered.includes(this._transportMode)) {
+            offered.push(this._transportMode);
+        }
+        const transportOptions = [
+            { value: autoValue, label: t('admin.transportAuto') },
+            ...offered.map((mode) => ({
+                value: mode,
+                label:
+                    mode === 'wss'
+                        ? `${transportLabels[mode] || mode} — ${t('admin.transportLanIpOnly')}`
+                        : transportLabels[mode] || mode,
+            })),
+        ];
+
+        const allowedLabels = {
+            all: t('admin.allowedTransportsAll'),
+            webrtc: t('admin.allowedTransportsWebrtc'),
+            wss: t('admin.allowedTransportsWss'),
+        };
+        const allowedOptions = ALLOWED_TRANSPORTS.map((value) => ({
+            value,
+            label: allowedLabels[value],
+        }));
+        return `
+                    <div class="settings-field">
+                        <label class="settings-label" for="select-allowed-transports">
+                            ${t('admin.allowedTransports')}
+                        </label>
+                        <select id="select-allowed-transports" class="settings-select">
+                            ${allowedOptions
+                                .map(
+                                    (o) =>
+                                        `<option value="${o.value}" ${o.value === this._allowedTransports ? 'selected' : ''}>${this.esc(o.label)}</option>`,
+                                )
+                                .join('')}
+                        </select>
+                        <p class="settings-hint">
+                            ${t('admin.allowedTransportsHint')}
+                        </p>
+                    </div>
+
+                    <div class="settings-field">
+                        <label class="settings-label" for="select-transport-mode">
+                            ${t('admin.transportMode')}
+                        </label>
+                        <select id="select-transport-mode" class="settings-select">
+                            ${transportOptions
+                                .map(
+                                    (o) =>
+                                        `<option value="${o.value}" ${o.value === this._transportMode ? 'selected' : ''}>${this.esc(o.label)}</option>`,
+                                )
+                                .join('')}
+                        </select>
+                        <p class="settings-hint">
+                            ${t('admin.transportModeHint')}
+                        </p>
+                    </div>
+`;
+    }
+
     async _saveInternetPrefs() {
         const transportSelect = this.container.querySelector('#select-transport-mode');
         const newMode = transportSelect ? transportSelect.value : this._transportMode;
@@ -2245,6 +2296,29 @@ export class AdminView {
         } catch (err) {
             console.warn('[Admin] Failed to save transport prefs:', err);
             Toast.error(t('admin.transportSaveFailed'));
+        }
+    }
+
+    /**
+     * Save « Allowed transports » at once. The transport modes on offer follow
+     * the policy (available_transports), so the status is read again and the
+     * page redrawn; a refusal puts the stored value back.
+     */
+    async _saveAllowedTransports(value) {
+        const previous = this._allowedTransports;
+        try {
+            await BackendClient.saveStreamingSettings({ allowed_transports: value });
+            this._allowedTransports = value;
+            Toast.success(t('admin.allowedTransportsSaved'));
+            await this._loadInternetState();
+            this.render();
+            this.bindEvents();
+        } catch (err) {
+            console.warn('[Admin] Failed to save allowed transports:', err);
+            Toast.error(t('admin.transportSaveFailed'));
+            this._allowedTransports = previous;
+            const select = this.container.querySelector('#select-allowed-transports');
+            if (select) select.value = previous;
         }
     }
 
