@@ -111,7 +111,7 @@
 #include "streaming/DataChannelRelay.h"
 #include "streaming/MediaTrackRelay.h"
 #include "streaming/StreamRelay.h"
-#include "streaming/TransportPriorities.h"
+#include "streaming/TransportChain.h"
 #include "streaming/ConsoleSession.h"
 #include "streaming/SharedFeed.h"
 #include "streaming/StreamEnds.h"
@@ -1251,69 +1251,18 @@ static int runTrayClient(QApplication& app, quint16 persistedHttpsPort, bool own
     return app.exec();
 }
 
-// Does @p h advertise support for codec @p c?
-//
-// Uses the canonical SCM_MASK_* values (Limelight.h). The old GFE-era literals
-// (HEVC 0x02, AV1 0x20) are wrong for Sunshine, which reports HEVC at 0x100 and
-// AV1 at 0x10000 → HEVC/AV1 were seen as unsupported.
-static bool hostSupportsCodec(NvComputer* h, VideoCodec c)
+// MediaTrack rungs carry H.264 only: does this stream keep them? Logged here,
+// the rule itself is TransportChain.h's. Shared by the owner's /start and a
+// player's join so both walk the same chain.
+static bool streamMediaTrackAllowed(VideoCodec requested, NvComputer* h)
 {
     const int support = h->serverCodecModeSupport;
-    switch (c) {
-    case VideoCodec::H264: return (support & SCM_MASK_H264) != 0;
-    case VideoCodec::HEVC: return (support & SCM_MASK_HEVC) != 0;
-    case VideoCodec::AV1: return (support & SCM_MASK_AV1) != 0;
-    default: return true;
-    }
-}
-
-// Filter a transport list by codec compatibility.
-//
-// Rules:
-//   - H.264 works on all transports.
-//   - HEVC and AV1 are skipped for MediaTrack modes (<video> element codec
-//     support varies across browsers; DataChannel WebCodecs is more reliable).
-//   - If the host doesn't support the selected codec, try H.264 instead (if the
-//     host supports it).
-//
-// Shared by the owner's /start and a player's join so both walk the same chain.
-static QStringList filterTransportsByCodec(const QStringList& transports, VideoCodec codec,
-                                           NvComputer* h)
-{
-    // Determine effective codec (resolve Auto → HEVC if host supports)
-    VideoCodec effective = codec;
+    const VideoCodec effective = transportchain::effectiveCodec(requested, support);
     if (effective == VideoCodec::Auto)
-        effective = hostSupportsCodec(h, VideoCodec::HEVC) ? VideoCodec::HEVC : VideoCodec::H264;
-
-    // If host doesn't support the effective codec, fall back to H.264
-    if (!hostSupportsCodec(h, effective)) {
-        if (hostSupportsCodec(h, VideoCodec::H264)) {
-            qInfo() << "[Auto] Codec" << static_cast<int>(effective)
-                    << "not supported by host, falling back to H.264";
-            effective = VideoCodec::H264;
-        } else {
-            qWarning() << "[Auto] Host supports NO video codec!";
-            return transports; // Return all, let it fail naturally
-        }
-    }
-
-    qInfo() << "[Auto] Effective codec:" << static_cast<int>(effective);
-
-    QStringList result;
-    for (const auto& t : transports) {
-        if ((effective == VideoCodec::AV1 || effective == VideoCodec::HEVC) &&
-            t.startsWith("webrtc-media")) {
-            qInfo() << "[Auto] Skipping" << t << "(MediaTrack only supports H.264, codec is"
-                    << static_cast<int>(effective) << ")";
-            continue; // Skip non-H.264 codecs on MediaTrack
-        }
-        // Note: with video enhancement ON, MediaTrack is NOT skipped — it is
-        // kept as a last resort (ordered last by TransportPriorities) and
-        // streams WITHOUT enhancement (<video> cannot be processed by WebGPU).
-        // The ordering is handled in orderedTransports().
-        result.append(t);
-    }
-    return result;
+        qWarning() << "[Auto] Host supports NO video codec!";
+    else
+        qInfo() << "[Auto] Effective codec:" << static_cast<int>(effective);
+    return transportchain::mediaTrackAllowed(requested, support);
 }
 
 // Where a stream's browser is, for the ICE plan. The socket peer answers it for
@@ -1360,29 +1309,16 @@ static bool streamClientSameNetwork(const HttpRequest& req, NetClassify::Kind ki
 // A browser whose STUN probe got no answer (frontend/js/api/UdpProbe.js) sits
 // on a network that lets no UDP out: each UDP rung would run to its ICE
 // deadline, ten seconds apiece, before the chain reached one that can connect.
-// Dropped — but only for a browser planned for the internet. On a LAN, STUN can
-// fail for want of an internet while the host is one UDP hop away, and the
-// verdict is the browser's word, so it is only ever allowed to shorten a chain
-// that already had to go the long way. Never down to nothing. The bench switch
-// debug_ice_drop_udp drops them too, for every browser: with no UDP candidate
-// crossing, a UDP rung could only run to its deadline.
-static void dropUdpRungsWhenBlocked(QStringList& chain, const QJsonObject& body,
-                                    NetClassify::Kind clientKind, bool viaTunnel)
+// TransportChain drops them (udpRungsDropped says when); this says so.
+static void logUdpRungsDropped(const transportchain::Chain& chain, bool debugDrop)
 {
-    const bool debugDrop = AppSettings().debugIceDropUdp();
-    if (!debugDrop) {
-        if (!body.value(QStringLiteral("udp_blocked")).toBool(false)) return;
-        if (!viaTunnel && clientKind != NetClassify::Kind::Public) return;
-    }
-    QStringList kept;
-    for (const QString& m : chain)
-        if (!m.endsWith(QStringLiteral("-udp"))) kept.append(m);
-    if (kept.isEmpty() || kept.size() == chain.size()) return;
+    if (!chain.udpDropped) return;
     if (debugDrop)
-        qWarning() << "[Session] DEBUG debug_ice_drop_udp is ON — UDP rungs skipped:" << kept;
+        qWarning() << "[Session] DEBUG debug_ice_drop_udp is ON — UDP rungs skipped:"
+                   << chain.rungs;
     else
-        qInfo() << "[Session] The browser's STUN probe got no answer — UDP rungs skipped:" << kept;
-    chain = kept;
+        qInfo() << "[Session] The browser's STUN probe got no answer — UDP rungs skipped:"
+                << chain.rungs;
 }
 
 // Default ports of a DEV identity (the DEV build, or --dev): see Edition.h.
@@ -3478,76 +3414,44 @@ int main(int argc, char* argv[])
         //   "webrtc-dc-tcp"       → DataChannel + UDP+TCP
         //   "wss"                 → StreamRelay (WebSocket, always works)
         // ================================================================
-        QString transportMode = appSettings.transportMode();
-        if (transportMode.isEmpty()) transportMode = "auto";
-
-        // A per-request transport_mode (sent by the browser) overrides the admin
-        // setting. The browser does NOT normally send it; it only sends
-        // transport_index to walk the fallback chain on relaunch.
-        if (body.contains("transport_mode") && !body["transport_mode"].toString().isEmpty())
-            transportMode = body["transport_mode"].toString();
-        if (transportMode == QStringLiteral("all")) transportMode = QStringLiteral("auto");
-
         // Index into the fallback chain that this attempt targets (the browser
         // increments it and relaunches when a transport fails to connect).
         int reqTransportIndex =
             body.contains("transport_index") ? body["transport_index"].toInt(0) : 0;
 
-        // ── Auto-mode: priority-ordered transport list from header ─────
-        // hostSupportsCodec / filterTransportsByCodec are file-level helpers so
-        // a player's join builds its chain with the very same rules.
-
         // ── Build the ordered transport fallback chain ─────────────────────────
         // The chain is the single source of truth, computed once and echoed back
         // to the browser. The browser drives the fallback by relaunching with the
-        // next index when a transport fails to establish a connection.
+        // next index when a transport fails to establish a connection. The rules
+        // (forced mode first, wss out through the rendezvous, blocked UDP) live
+        // in TransportChain.h, shared with a player's join.
         //
-        //   - "auto"      → the priority-ordered list (enhancement-aware, codec-
-        //                   filtered).
-        //   - explicit X  → X first; if X is a "-udp" mode, its "-tcp" sibling is
-        //                   promoted to second (prefer the same transport family
-        //                   before switching), then the rest of the auto order.
-        QStringList autoOrder = filterTransportsByCodec(
-            TransportPriorities::orderedTransports(reqVideoEnhancement), reqCodec, host);
-
-        QStringList transportChain;
-        if (transportMode == "auto") {
-            transportChain = autoOrder;
-        } else {
-            transportChain.append(transportMode); // forced mode first
-            // Keep the same transport family on first fallback: a forced "-udp"
-            // mode prefers its "-tcp" sibling second (e.g. webrtc-media-udp →
-            // webrtc-media-tcp) before falling through to other transports.
-            QString sibling;
-            if (transportMode.endsWith(QStringLiteral("-udp")))
-                sibling = transportMode.left(transportMode.length() - 4) + QStringLiteral("-tcp");
-            if (!sibling.isEmpty() && autoOrder.contains(sibling)) transportChain.append(sibling);
-            for (const QString& m : autoOrder)
-                if (m != transportMode && m != sibling) transportChain.append(m);
-        }
-        // The legacy WebSocket relay carries video over the same TLS connection
-        // that serves the page. A browser reached through the rendezvous has no
-        // such connection — that is the point of the architecture — so the mode
-        // comes out of the chain entirely, including when it was asked for by
-        // name: leaving it in would cost the user a relaunch to discover that a
-        // transport requiring an open port cannot work without one. Blocked UDP
-        // is covered here by ICE-TCP instead.
+        // A per-request transport_mode (sent by the browser) overrides the admin
+        // setting. The browser does NOT normally send it; it only sends
+        // transport_index to walk the fallback chain on relaunch.
+        transportchain::Inputs chainIn;
+        chainIn.adminMode = appSettings.transportMode();
+        chainIn.bodyMode = body["transport_mode"].toString();
+        chainIn.viaTunnel = req.viaTunnel;
+        const bool debugDropUdp = appSettings.debugIceDropUdp();
+        chainIn.dropUdp = transportchain::udpRungsDropped(
+            debugDropUdp, body.value(QStringLiteral("udp_blocked")).toBool(false), req.viaTunnel,
+            clientKind == NetClassify::Kind::Public);
+        chainIn.videoEnhancement = reqVideoEnhancement;
+        chainIn.mediaTrackAllowed = streamMediaTrackAllowed(reqCodec, host);
+        const transportchain::Chain chain = transportchain::build(chainIn);
+        const QStringList transportChain = chain.rungs;
         // Asked for by name and taken away: the session that runs is NOT the one
         // the user selected. Silence here reads as "wss works, and it is slow" —
         // 2026-08-30, a whole transport comparison was charged to wss when every
         // run had actually been DataChannel/UDP. Name it, in the log and to the
         // browser.
-        QString transportDropped;
-        if (req.viaTunnel && transportChain.contains(QStringLiteral("wss"))) {
-            transportChain.removeAll(QStringLiteral("wss"));
-            if (transportMode == QStringLiteral("wss")) {
-                transportDropped = QStringLiteral("wss");
-                qInfo() << "[Session] wss was requested but cannot run through the rendezvous"
-                        << "(it needs the TLS connection that serves the page) — falling back to"
-                        << transportChain;
-            }
-        }
-        dropUdpRungsWhenBlocked(transportChain, body, clientKind, req.viaTunnel);
+        const QString transportDropped = chain.dropped;
+        if (!transportDropped.isEmpty())
+            qInfo() << "[Session] wss was requested but cannot run through the rendezvous"
+                    << "(it needs the TLS connection that serves the page) — falling back to"
+                    << transportChain;
+        logUdpRungsDropped(chain, debugDropUdp);
 
         qInfo() << "[Session] Transport chain:" << transportChain
                 << "requested index=" << reqTransportIndex;
@@ -5505,14 +5409,21 @@ int main(int argc, char* argv[])
         // Players always get the enhancement-aware ordering: their profile
         // runs SGSR1 until it proves too expensive (frontend governor). The
         // H.264 rungs are the same list with the MediaTrack ones appended, so
-        // an index into one names the same transport in the other.
-        QStringList chain =
-            filterTransportsByCodec(TransportPriorities::orderedTransports(true), codec, host);
-        // Same rule as the owner's chain: through the rendezvous there is no
-        // TLS connection of ours to carry the wss rung.
-        if (req.viaTunnel) chain.removeAll(QStringLiteral("wss"));
-        dropUdpRungsWhenBlocked(chain, QJsonDocument::fromJson(req.body).object(),
-                                streamClientKind(req), req.viaTunnel);
+        // an index into one names the same transport in the other. Otherwise
+        // the owner's rules (TransportChain.h): no wss through the rendezvous,
+        // no UDP rung for a browser whose UDP is blocked.
+        const QJsonObject joinBody = QJsonDocument::fromJson(req.body).object();
+        transportchain::Inputs chainIn;
+        chainIn.viaTunnel = req.viaTunnel;
+        const bool debugDropUdp = appSettings.debugIceDropUdp();
+        chainIn.dropUdp = transportchain::udpRungsDropped(
+            debugDropUdp, joinBody.value(QStringLiteral("udp_blocked")).toBool(false),
+            req.viaTunnel, streamClientKind(req) == NetClassify::Kind::Public);
+        chainIn.videoEnhancement = true;
+        chainIn.mediaTrackAllowed = streamMediaTrackAllowed(codec, host);
+        const transportchain::Chain built = transportchain::build(chainIn);
+        logUdpRungsDropped(built, debugDropUdp);
+        const QStringList chain = built.rungs;
         if (chain.isEmpty()) {
             respond(HttpResponse::error(502, "No usable transport"));
             return;
