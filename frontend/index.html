@@ -24,7 +24,9 @@
              connections to a host: once six files hang, every later request
              waits behind them, and a watchdog asked for last never arrives. -->
         <script async src="/js/bootWatch.js?v=__MW_VERSION__"></script>
-        <link rel="manifest" href="/manifest.webmanifest" />
+        <!-- With credentials: behind a proxy that signs users in, an anonymous
+             manifest request is refused and the page cannot be installed. -->
+        <link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials" />
         <link rel="apple-touch-icon" sizes="180x180" href="/assets/icon-180.png" />
         <!-- Cyberpunk-style display + mono fonts, served from this machine.
              They came from fonts.googleapis.com until the introduction server

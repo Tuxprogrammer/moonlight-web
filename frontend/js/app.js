@@ -1475,7 +1475,10 @@ export const MoonlightApp = {
             return; // the shortcut asks for the PIN, as before
         }
         const link = document.querySelector('link[rel="manifest"]');
-        if (link) link.setAttribute('href', `/manifest.webmanifest?t=${Date.now()}`);
+        if (!link) return;
+        // With credentials, as in index.html: a shell cached by an older build lacks it.
+        link.setAttribute('crossorigin', 'use-credentials');
+        link.setAttribute('href', `/manifest.webmanifest?t=${Date.now()}`);
     },
 
     /** Whether this page IS an installed shortcut rather than a browser tab. */
