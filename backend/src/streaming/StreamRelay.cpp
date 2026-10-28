@@ -16,6 +16,7 @@
  */
 
 #include "StreamRelay.h"
+#include "ClientDiagnostic.h"
 #include "ClipboardBridge.h"
 #include "InputMessageCodec.h"
 #include "IMediaEngine.h"
@@ -776,6 +777,9 @@ void StreamRelay::onWsTextMessage(const QString& message)
     } else if (type == "linkstats") {
         // The page reports its link on every transport; only the WebRTC
         // relay has a governor to feed, so here it is simply not news.
+    } else if (InputMsg::isClientDiagnostic(type)) {
+        // Logged, never input (see ClientDiagnostic.h).
+        qInfo().noquote() << "[StreamRelay]" << InputMsg::describeClientDiagnostic(type, msg);
     } else {
         qWarning() << "[StreamRelay] Unknown input type:" << type;
     }

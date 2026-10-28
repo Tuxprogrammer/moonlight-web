@@ -16,6 +16,7 @@
  */
 
 #include "MediaTrackRelay.h"
+#include "ClientDiagnostic.h"
 #include "ClipboardBridge.h"
 #include "InputMessageCodec.h"
 #include "PacketMarking.h"
@@ -1018,6 +1019,9 @@ void MediaTrackRelay::onInputMessage(const std::string& message)
         // Linux): one report, at most the 63 bytes of HID++'s longest.
         const QByteArray data = QByteArray::fromBase64(msg["data"].toString().toLatin1()).left(64);
         m_Shim->hidReply(msg["slot"].toInt(-1), msg["reportId"].toInt(-1), data);
+    } else if (InputMsg::isClientDiagnostic(type)) {
+        // Logged, never input (see ClientDiagnostic.h).
+        qInfo().noquote() << "[MediaTrackRelay]" << InputMsg::describeClientDiagnostic(type, msg);
     } else {
         qWarning() << "[MediaTrackRelay] Unknown input type:" << type;
     }

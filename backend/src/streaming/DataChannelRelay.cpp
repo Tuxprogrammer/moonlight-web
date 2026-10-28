@@ -17,6 +17,7 @@
 
 #include "DataChannelRelay.h"
 #include "AudioPathLog.h"
+#include "ClientDiagnostic.h"
 #include "ClipboardBridge.h"
 #include "InputMessageCodec.h"
 #include "PacketMarking.h"
@@ -2356,6 +2357,9 @@ void DataChannelRelay::onInputMessage(const std::string& message, int64_t recvUs
     } else if (type == "uprobe") {
         // The uplink bench's dated message: nothing to inject, only its stamp
         // to answer (above).
+    } else if (InputMsg::isClientDiagnostic(type)) {
+        // Logged, never input (see ClientDiagnostic.h).
+        qInfo().noquote() << "[DataChannelRelay]" << InputMsg::describeClientDiagnostic(type, msg);
     } else {
         qWarning() << "[DataChannelRelay] Unknown input type:" << type;
     }
