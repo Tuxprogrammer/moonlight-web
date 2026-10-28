@@ -23,6 +23,7 @@
 #include "StaticFileHandler.h"
 #include "server/AuthManager.h"
 #include "server/HomeScreenShell.h"
+#include "clipboard/ClipboardAgentProtocol.h"
 #include "common/Edition.h"
 #include "common/Logger.h"
 
@@ -1514,6 +1515,38 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
         return;
     }
 
+    // ── Clipboard agents ─────────────────────────────────────────────────────
+    // Not a browser channel: its own gate (no Origin, TLS unless local) and its
+    // own credential (the host's bearer token), checked here so a wrong one
+    // lands in ConnectionGuard like any failed login. docs/design/clipboard-agent.md
+    if (up.path == ClipboardAgent::path()) {
+        auto* ssl = qobject_cast<QSslSocket*>(clientSocket);
+        const RequestGuard::AgentUpgrade gate = RequestGuard::clipboardAgentUpgrade(
+            !up.headers.value("origin").trimmed().isEmpty(), ssl && ssl->isEncrypted(),
+            isLocalRequest(peerAddr));
+        if (gate != RequestGuard::AgentUpgrade::Allow) {
+            Logger::warning(QString("[HttpServer] Clipboard agent upgrade refused from %1: %2")
+                                .arg(peerAddr, gate == RequestGuard::AgentUpgrade::RefuseBrowser
+                                                   ? QStringLiteral("a browser page")
+                                                   : QStringLiteral("not over TLS")));
+            m_ConnGuard.reportAuthFailure(peerAddr);
+            sendResponse(clientSocket, HttpResponse::error(403, "Forbidden"));
+            return;
+        }
+        if (m_ClipboardAgentPort == 0 || !m_ClipboardAgentAuth || !m_ClipboardAgentAuth(up)) {
+            Logger::warning(
+                QString("[HttpServer] Clipboard agent with no valid token refused from %1")
+                    .arg(peerAddr));
+            m_ConnGuard.reportAuthFailure(peerAddr);
+            QJsonObject obj;
+            obj["error"] = "authentication_required";
+            sendResponse(clientSocket, HttpResponse::json(obj, 401));
+            return;
+        }
+        proxyWebSocket(clientSocket, requestData, m_ClipboardAgentPort);
+        return;
+    }
+
     // ── Origin check ──────────────────────────────────────────────────────────
     // WebSockets are not subject to the same-origin policy: any page may open
     // one to any host, and no CORS negotiation stands in the way. Since a local
@@ -1601,6 +1634,12 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
     qInfo() << "[HttpServer] WebSocket upgrade detected, path=" << path
             << "targetPort=" << targetPort;
 
+    proxyWebSocket(clientSocket, requestData, targetPort);
+}
+
+void HttpServer::proxyWebSocket(QTcpSocket* clientSocket, const QByteArray& requestData,
+                                quint16 targetPort)
+{
     // Copy the upgrade request BEFORE removing from m_Buffers.  requestData is a
     // const reference to the QByteArray inside m_Buffers — remove() destroys it.
     // NOLINTNEXTLINE(performance-unnecessary-copy-initialization) — copy is required.

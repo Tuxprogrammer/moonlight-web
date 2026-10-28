@@ -36,6 +36,8 @@
 #include "../ConsoleSession.h"
 #include "../HidParkingTransfer.h"
 #include "../PacketMarking.h"
+#include "../RemoteClipboardProvider.h"
+#include "../../clipboard/ClipboardIpc.h"
 #include "../WorkerService.h"
 #include "../../backend/NvComputer.h"
 #include "../../backend/NvHTTP.h"
@@ -731,6 +733,17 @@ int runStreamWorker(QCoreApplication& app)
                                     {QStringLiteral("token"), token}});
                      });
 
+    // The host clipboard through the host's clipboard agent, whose socket is
+    // the server's: present only when the server decided this session may use
+    // one (the owner's own, on a remote host). The value is whether the agent
+    // is usable right now; "clipboardAgent" commands keep it current.
+    if (cfg.contains(QStringLiteral("clipboardAgent"))) {
+        auto* remote =
+            new RemoteClipboardProvider([](const QJsonObject& event) { emitEvent(event); },
+                                        cfg["clipboardAgent"].toBool(false), &app);
+        RemoteClipboardProvider::install(remote);
+    }
+
     session->setGamepadOffset(cfg["gamepadOffset"].toInt(0));
     if (!cfg["explicitWsUrl"].toString().isEmpty())
         session->setExplicitWsUrl(cfg["explicitWsUrl"].toString());
@@ -807,6 +820,17 @@ int runStreamWorker(QCoreApplication& app)
                 QMetaObject::invokeMethod(qApp, []() { teardownAndExit(2); }, Qt::QueuedConnection);
             } else if (cmd == QLatin1String("sessionEnded")) {
                 QMetaObject::invokeMethod(qApp, []() { teardownAndExit(3); }, Qt::QueuedConnection);
+            } else if (const ClipboardIpc::Command clip = ClipboardIpc::decodeCommand(msg);
+                       clip.kind != ClipboardIpc::Command::Kind::None) {
+                // The host clipboard agent, through the server: availability,
+                // the host's text, and the answer to a write.
+                QMetaObject::invokeMethod(
+                    qApp,
+                    [clip]() {
+                        if (RemoteClipboardProvider* remote = RemoteClipboardProvider::instance())
+                            remote->handleCommand(clip);
+                    },
+                    Qt::QueuedConnection);
             } else if (cmd == QLatin1String("setPolicy")) {
                 // The owner moved this player's inputs while they were playing.
                 // Not a teardown: the stream carries on under the new rules.

@@ -165,6 +165,8 @@ The native engine streams **the machine MoonlightWeb runs on**. Moonlight‑Web 
 
 > ⚠️ MultiSeat's per‑seat stream path is **not yet tested end to end**: provisioning a seat needs a free Windows session the bench cannot offer.
 
+**Clipboard on a host that is another machine.** GameStream carries no clipboard, so a Sunshine host shares its own through `moonlightweb-clipboard-agent`, a small program you run on that host, in its desktop session (built with the server, or alone from `backend/clipboard-agent`). On the admin page, open the host, turn **Clipboard agent** on and generate a token: you get a setup line and a command to paste on the host. Copy on the host and paste in your browser, or the other way round, as with the machine MoonlightWeb runs on. Nothing is installed on the device you watch from. Wayland (KDE Plasma, wlroots, through wl‑clipboard or Klipper), X11, Windows and macOS. Off until you turn it on, never for invited players, and the host's clipboard is only read while you stream it. Details: [wiki §5.5](docs/wiki/05-Streaming-and-Transports.md#clipboard-from-a-remote-host-the-clipboard-agent).
+
 Using MoonlightWeb only as a front end? Set `"native_host_enabled": false` in [`settings.json`](#advanced-config--settingsjson) to hide this machine's card.
 
 ---

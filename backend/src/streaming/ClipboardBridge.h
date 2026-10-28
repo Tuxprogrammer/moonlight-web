@@ -17,12 +17,9 @@
 
 #pragma once
 
-#include "ClipboardMessage.h"
+#include "ClipboardProvider.h"
 
-#include <QObject>
 #include <QString>
-
-class IMediaEngine;
 
 /// Bidirectional text clipboard bridge between the browser client and the
 /// host machine, active only when the streamed Sunshine host IS this machine
@@ -45,7 +42,10 @@ class IMediaEngine;
 /// All QClipboard access happens on the Qt main thread (QClipboard is
 /// main-thread-only); relays call in from their dedicated threads through
 /// queued invocations.
-class ClipboardBridge : public QObject
+///
+/// A host somewhere else reaches its clipboard through an agent instead:
+/// RemoteClipboardProvider, behind the same ClipboardProvider interface.
+class ClipboardBridge : public ClipboardProvider
 {
     Q_OBJECT
 
@@ -55,7 +55,7 @@ public:
 
     /// Lazily created singleton. The FIRST call must come from the Qt main
     /// thread so the bridge gets main-thread affinity — guaranteed today:
-    /// Session::setClipboardEnabled(true) runs on the main thread before any
+    /// Session hands it to the relays from the main thread before any
     /// relay-thread code can reach the clipboard paths.
     static ClipboardBridge* instance();
 
@@ -65,32 +65,22 @@ public:
     /// Unresolvable hostnames are treated as remote (no blocking DNS lookup).
     static bool isSelfAddress(const QString& address);
 
+    /// This machine's clipboard is always there.
+    bool available() const override { return true; }
+
     /// Thread-safe. Queue onto the main thread: commit 'text' to the host
     /// clipboard, then inject the paste chord (V down/up) through the shim.
     /// wrapCtrl adds Ctrl down/up around the V for clients whose paste
     /// modifier doesn't map to Ctrl on the host (macOS Cmd arrives as Win).
-    void pasteFromClient(IMediaEngine* engine, const QString& text, bool wrapCtrl);
+    void pasteFromClient(IMediaEngine* engine, const QString& text, bool wrapCtrl) override;
 
     /// Thread-safe. Queue onto the main thread: commit 'text' to the host
     /// clipboard and press nothing.
-    void setFromClient(const QString& text);
-
-    /// Relay-thread entry for a decoded clipboard message (ClipboardMsg):
-    /// paste, set, or a debug line when it is ignored. Reaches instance()
-    /// only when there is something to do — an inactive relay must never be
-    /// the first caller (see instance()).
-    static void handleClientMessage(IMediaEngine* engine, const ClipboardMsg::Request& req,
-                                    const char* logTag);
+    void setFromClient(const QString& text) override;
 
     /// Thread-safe. Re-emit the current host clipboard text (initial sync
     /// when a client connects), even if unchanged since the last emission.
-    void requestAnnounce();
-
-signals:
-    /// Host clipboard changed (or an announce was requested). Emitted on the
-    /// main thread; relays connect with themselves as context so the slot
-    /// runs on their thread.
-    void hostTextChanged(const QString& text);
+    void requestAnnounce() override;
 
 private:
     explicit ClipboardBridge(QObject* parent);

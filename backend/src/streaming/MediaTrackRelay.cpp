@@ -17,7 +17,6 @@
 
 #include "MediaTrackRelay.h"
 #include "ClientDiagnostic.h"
-#include "ClipboardBridge.h"
 #include "InputMessageCodec.h"
 #include "PacketMarking.h"
 #include "IMediaEngine.h"
@@ -206,24 +205,16 @@ MediaTrackRelay::MediaTrackRelay(IMediaEngine* engine, QObject* parent)
     connect(m_StatsTimer, &QTimer::timeout, this, &MediaTrackRelay::onStatsTimerTick);
 }
 
-void MediaTrackRelay::setClipboardEnabled(bool enabled)
+void MediaTrackRelay::setClipboardProvider(ClipboardProvider* provider)
 {
-    m_ClipboardEnabled = enabled;
-    if (!enabled) return;
-    // Host clipboard changes → push to the browser over the input DC.
-    // Context 'this': the slot runs on the relay's (future) thread; the DC
-    // send itself is thread-safe. Auto-disconnected when the relay dies.
-    connect(ClipboardBridge::instance(), &ClipboardBridge::hostTextChanged, this,
-            [this](const QString& text) {
-                if (m_Stopping.load() || !m_Connected || !m_InputDc) return;
-                QJsonObject m;
-                m["type"] = "clipboard";
-                m["text"] = text;
-                QByteArray j = QJsonDocument(m).toJson(QJsonDocument::Compact);
-                try {
-                    m_InputDc->send(std::string(j.constData(), j.size()));
-                } catch (const std::exception&) {}
-            });
+    // Host clipboard → the browser over the input DC. The slots run on the
+    // relay's (future) thread; the DC send itself is thread-safe.
+    m_Clipboard.attach(provider, this, [this](const QByteArray& json) {
+        if (m_Stopping.load() || !m_Connected || !m_InputDc) return;
+        try {
+            m_InputDc->send(std::string(json.constData(), json.size()));
+        } catch (const std::exception&) {}
+    });
 }
 
 MediaTrackRelay::~MediaTrackRelay()
@@ -484,15 +475,13 @@ void MediaTrackRelay::createTracksAndChannels()
                 m_Connected = true;
                 emit dataChannelsOpen();
 
-                if (m_ClipboardEnabled) {
-                    // Advertise clipboard sync, then push the current host
-                    // clipboard once so copy-before-connect pastes locally.
-                    static const char kCaps[] = "{\"type\":\"clipboardcaps\",\"available\":true}";
+                // Advertise clipboard sync, then push the current host clipboard
+                // once so copy-before-connect pastes locally.
+                m_Clipboard.clientConnected([this](const QByteArray& json) {
                     try {
-                        m_InputDc->send(std::string(kCaps));
+                        m_InputDc->send(std::string(json.constData(), json.size()));
                     } catch (const std::exception&) {}
-                    ClipboardBridge::instance()->requestAnnounce();
-                }
+                });
 
                 sendHidCaps();
                 sendInputCaps(); // see DataChannelRelay
@@ -889,12 +878,8 @@ void MediaTrackRelay::onInputMessage(const std::string& message)
         // sent once per session on the browser's first real keyboard event.
         m_Shim->syncLockKeys(msg["numLock"].toBool(false), msg["capsLock"].toBool(false),
                              msg["scrollLock"].toBool(false));
-    } else if (ClipboardMsg::isClipboardType(type)) {
-        // 'clipboardpaste' (Ctrl/Cmd+V: commit the text, then inject the
-        // chord, in one main-thread hop) and 'clipboardset' (the clipboard
-        // panel: commit only). Dropped unless the clipboard switch is on.
-        ClipboardBridge::handleClientMessage(
-            m_Shim, ClipboardMsg::decode(type, msg, m_ClipboardEnabled), "[MediaTrackRelay]");
+    } else if (m_Clipboard.handle(m_Shim, type, msg, "[MediaTrackRelay]")) {
+        // clipboardpaste / clipboardset: RelayClipboard acted on it.
     } else if (type == "unblockinput") {
         // The way out of a closed input gate — native host only, full
         // reasoning in DataChannelRelay's handler.

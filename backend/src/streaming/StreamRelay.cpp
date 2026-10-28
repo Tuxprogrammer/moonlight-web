@@ -17,7 +17,6 @@
 
 #include "StreamRelay.h"
 #include "ClientDiagnostic.h"
-#include "ClipboardBridge.h"
 #include "InputMessageCodec.h"
 #include "IMediaEngine.h"
 #include "NativeMediaEngine.h"
@@ -157,24 +156,15 @@ StreamRelay::~StreamRelay()
     stop();
 }
 
-void StreamRelay::setClipboardEnabled(bool enabled)
+void StreamRelay::setClipboardProvider(ClipboardProvider* provider)
 {
-    m_ClipboardEnabled = enabled;
-    if (!enabled) return;
-    // Host clipboard changes → push to the browser over the WebSocket.
-    // Context 'this': the slot runs on the relay's (future) thread, which
-    // owns the socket. Auto-disconnected when the relay dies.
-    connect(ClipboardBridge::instance(), &ClipboardBridge::hostTextChanged, this,
-            [this](const QString& text) {
-                if (m_Stopping || !m_WsClient ||
-                    m_WsClient->state() != QAbstractSocket::ConnectedState)
-                    return;
-                QJsonObject m;
-                m["type"] = "clipboard";
-                m["text"] = text;
-                m_WsClient->sendTextMessage(
-                    QString::fromUtf8(QJsonDocument(m).toJson(QJsonDocument::Compact)));
-            });
+    // Host clipboard → the browser over the WebSocket, from the relay's
+    // thread, which owns the socket.
+    m_Clipboard.attach(provider, this, [this](const QByteArray& json) {
+        if (m_Stopping || !m_WsClient || m_WsClient->state() != QAbstractSocket::ConnectedState)
+            return;
+        m_WsClient->sendTextMessage(QString::fromUtf8(json));
+    });
 }
 
 bool StreamRelay::start()
@@ -597,13 +587,10 @@ void StreamRelay::onNewWsConnection()
         m_StatsTimer->start();
     }
 
-    if (m_ClipboardEnabled) {
-        // Advertise clipboard sync, then push the current host clipboard
-        // once so copy-before-connect pastes locally.
-        m_WsClient->sendTextMessage(
-            QStringLiteral("{\"type\":\"clipboardcaps\",\"available\":true}"));
-        ClipboardBridge::instance()->requestAnnounce();
-    }
+    // Advertise clipboard sync, then push the current host clipboard once so
+    // copy-before-connect pastes locally.
+    m_Clipboard.clientConnected(
+        [this](const QByteArray& json) { m_WsClient->sendTextMessage(QString::fromUtf8(json)); });
 
     emit clientConnected();
 }
@@ -708,12 +695,8 @@ void StreamRelay::onWsTextMessage(const QString& message)
         // sent once per session on the browser's first real keyboard event.
         m_Shim->syncLockKeys(msg["numLock"].toBool(false), msg["capsLock"].toBool(false),
                              msg["scrollLock"].toBool(false));
-    } else if (ClipboardMsg::isClipboardType(type)) {
-        // 'clipboardpaste' (Ctrl/Cmd+V: commit the text, then inject the
-        // chord, in one main-thread hop) and 'clipboardset' (the clipboard
-        // panel: commit only). Dropped unless the clipboard switch is on.
-        ClipboardBridge::handleClientMessage(
-            m_Shim, ClipboardMsg::decode(type, msg, m_ClipboardEnabled), "[StreamRelay]");
+    } else if (m_Clipboard.handle(m_Shim, type, msg, "[StreamRelay]")) {
+        // clipboardpaste / clipboardset: RelayClipboard acted on it.
     } else if (type == "unblockinput") {
         // The way out of a closed input gate — native host only, full
         // reasoning in DataChannelRelay's handler.

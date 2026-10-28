@@ -71,6 +71,16 @@ public:
     /// rejected here. An empty @p domain matches anything.
     static bool certMatchesDomain(const QSslCertificate& cert, const QString& domain);
 
+    /// "sha256/<base64>" of @p cert's SubjectPublicKeyInfo — what a clipboard
+    /// agent pins. The key, not the certificate: the local certificate is
+    /// re-issued at every start (fresh LAN SANs) but keeps its key. Empty for
+    /// a null certificate.
+    static QString spkiPin(const QSslCertificate& cert);
+    /// The pins of the certificates served now: the public one (the default,
+    /// and what a client connecting by IP gets) first, then the local one if
+    /// it differs.
+    QStringList keyPins() const;
+
 private:
     QString findCertDir();
     bool loadCertFiles(const QString& certDir);

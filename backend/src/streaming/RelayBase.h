@@ -219,7 +219,7 @@ protected:
 
     /// Written once on the main thread before the relay moves to its own
     /// thread, read-only afterwards — same lifetime discipline as
-    /// m_ClipboardEnabled.
+    /// m_Clipboard.
     InputMsg::Policy m_InputPolicy;
 
     // ── ICE connectivity deadline ───────────────────────────────────────────

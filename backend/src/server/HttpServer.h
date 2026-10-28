@@ -91,6 +91,19 @@ public:
     }
 
     /// Slots at or above this index belong to players, not to the owner.
+    /// The clipboard agents' local endpoint (ClipboardAgentServer), which
+    /// /ws/clipboard-agent is proxied to once @p authorize accepts the
+    /// handshake's bearer token. Unset = the path answers 401.
+    void setClipboardAgentEndpoint(quint16 port, std::function<bool(const HttpRequest&)> authorize)
+    {
+        m_ClipboardAgentPort = port;
+        m_ClipboardAgentAuth = std::move(authorize);
+    }
+
+    /// SHA-256 pins of the public keys this server presents (public and local
+    /// certificates), for a clipboard agent to pin. See CertManager::spkiPin.
+    QStringList tlsKeyPins() const { return m_Certs.keyPins(); }
+
     void setFirstPlayerSlot(int slot) { m_FirstPlayerSlot = slot; }
 
     /// First "extra" slot: an independent OWNER session on a second host, handed
@@ -282,6 +295,10 @@ private:
     void armIdleClose(QTcpSocket* socket);
     void stopIdleClose(QTcpSocket* socket);
     void handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArray& requestData);
+    /// Hand the upgraded connection to the local WebSocket server on
+    /// @p targetPort, both ways, until either side closes.
+    void proxyWebSocket(QTcpSocket* clientSocket, const QByteArray& requestData,
+                        quint16 targetPort);
     bool isLanHost(const QString& host) const;
 
     /// Push CertManager's public config onto the live SslServer as its public
@@ -330,6 +347,8 @@ private:
     std::function<wsproxy::SlotState(int slot)> m_SlotState;
     /// Player-slot gate (see setPlayerSlotAuthorizer). Null = closed.
     std::function<bool(const HttpRequest&, int slot)> m_PlayerSlotAuth;
+    quint16 m_ClipboardAgentPort = 0;
+    std::function<bool(const HttpRequest&)> m_ClipboardAgentAuth;
     int m_FirstPlayerSlot = 2;
     /// Upper bound of the player-slot range (exclusive). Slots at or above this
     /// index are owner "extra" sessions, not players. INT_MAX = no extra range.

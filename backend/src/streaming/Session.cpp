@@ -17,6 +17,8 @@
 
 #include "Session.h"
 #include "ClipboardBridge.h"
+#include "RemoteClipboardProvider.h"
+#include "clipboard/ClipboardRoute.h"
 #include "HostAudioSink.h"
 #include "DataChannelRelay.h"
 #include "MediaTrackRelay.h"
@@ -737,17 +739,26 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         startEngine = [shim, params]() { shim->startConnection(params); };
     }
 
-    // Clipboard sync is only possible when the streamed host is this machine
-    // (standard installer deployment: backend runs next to Sunshine) — the
-    // backend clipboard is then the host's. For remote Sunshine hosts the
-    // relay stays clipboard-silent and the browser keeps today's behavior.
+    // Where the host clipboard comes from (ClipboardRoute). This machine's
+    // clipboard when the streamed host is this machine (the standard
+    // installer deployment: backend next to Sunshine). A remote host's through
+    // its clipboard agent, when the server installed a remote provider for
+    // this session — it does so only for the owner's own session on a host
+    // whose agent the admin enabled, and switches it off while the agent is
+    // away. Otherwise the relay stays clipboard-silent and Ctrl+V is a plain
+    // keystroke.
     //
-    // A restricted session (an invited player) never gets it either, whatever
-    // the address: the host's clipboard is an exfiltration channel, and it is
-    // not a guest's to read.
+    // A restricted session (an invited player) never gets either: the host's
+    // clipboard is an exfiltration channel, and it is not a guest's to read.
     const bool hostIsSelf = ClipboardBridge::isSelfAddress(m_Host->activeAddress.address());
-    const bool clipboardLocal = hostIsSelf && m_InputPolicy.unrestricted();
-    qInfo() << "[Session] Clipboard sync" << (clipboardLocal ? "enabled" : "disabled")
+    const ClipboardRoute::Route clipboardRoute = ClipboardRoute::workerProvider(
+        hostIsSelf, m_InputPolicy.unrestricted(), RemoteClipboardProvider::instance() != nullptr);
+    ClipboardProvider* clipboard = nullptr;
+    if (clipboardRoute == ClipboardRoute::Route::Local)
+        clipboard = ClipboardBridge::instance();
+    else if (clipboardRoute == ClipboardRoute::Route::Agent)
+        clipboard = RemoteClipboardProvider::instance();
+    qInfo() << "[Session] Clipboard sync:" << ClipboardRoute::name(clipboardRoute)
             << "(host address:" << m_Host->activeAddress.address()
             << ", restricted:" << !m_InputPolicy.unrestricted() << ")";
     // Same gate for toggle-lock sync: when the streamed host is this machine,
@@ -808,7 +819,7 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         streamRelay->setServerHost(m_ServerHost);
         streamRelay->setHttpsPort(m_HttpsPort);
         streamRelay->setWsPath(m_WsPath);
-        streamRelay->setClipboardEnabled(clipboardLocal);
+        streamRelay->setClipboardProvider(clipboard);
         streamRelay->setInputPolicy(m_InputPolicy);
 
         connect(m_Engine, &IMediaEngine::connectionStarted, this,
@@ -854,7 +865,7 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // MediaTrackRelay: owns the libdatachannel PeerConnection + video track + audio/input DCs.
         // No QObject parent: it is moved onto a dedicated thread below.
         auto* relay = new MediaTrackRelay(m_Engine, nullptr);
-        relay->setClipboardEnabled(clipboardLocal);
+        relay->setClipboardProvider(clipboard);
         relay->setInputPolicy(m_InputPolicy);
 
         // SignalingServer: WebSocket for SDP/ICE exchange only.
@@ -924,7 +935,7 @@ void StreamSession::onLaunchResult(bool ok, const BackendError& err, const Media
         // DataChannelRelay: owns the libdatachannel PeerConnection + DataChannels.
         // No QObject parent: it is moved onto a dedicated thread below.
         auto* relay = new DataChannelRelay(m_Engine, nullptr);
-        relay->setClipboardEnabled(clipboardLocal);
+        relay->setClipboardProvider(clipboard);
         relay->setInputPolicy(m_InputPolicy);
         relay->setStreamBitrateKbps(m_StreamBitrateKbps);
 
