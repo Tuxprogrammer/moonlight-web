@@ -30,6 +30,7 @@ import {
     isBindRefusedClose,
 } from '../util/pairingCrypto.js';
 import { defaultIceServers } from './IceServers.js';
+import { WEBRTC_UNAVAILABLE, webrtcAvailable } from './WebRtcSupport.js';
 import { isViewMessage } from './hostMessages.js';
 import { setAudioJitterBufferTarget } from '../util/AudioJitter.js';
 import {
@@ -219,13 +220,25 @@ export class WebRtcMedia {
     connect() {
         if (this._stopping) return;
 
+        // No WebRTC in this browser: as WebRtcDataChannel, the rung ends at
+        // once, with the reason that skips every webrtc-* rung.
+        if (!webrtcAvailable()) {
+            console.error('[WebRtcMedia] This browser has no WebRTC — this transport cannot run');
+            // Deferred: connect() runs from the view's constructor, before its
+            // owner has wired the callbacks that walk the chain.
+            setTimeout(() => {
+                if (!this._stopping) this._onError(WEBRTC_UNAVAILABLE);
+            }, 0);
+            return;
+        }
+
         console.log('[WebRtcMedia] Connecting to signaling:', this.signalingUrl);
         this.signalingWs = openSignalingSocket(this.signalingUrl);
 
         this.signalingWs.onopen = () => {
             this._wsHadOpen = true;
             console.log('[WebRtcMedia] Signaling WS connected, waiting for SDP offer...');
-            this._createPeerConnection();
+            if (!this._createPeerConnection()) return;
             // MW-BIND-v1: announce our key and nonce. The host holds its SDP
             // offer until this arrives, since its signature covers the nonce.
             // Not for a share-link guest: see WebRtcDataChannel.
@@ -452,6 +465,7 @@ export class WebRtcMedia {
         };
     }
 
+    /** @returns {boolean} false when no peer connection could be made (reported) */
     _createPeerConnection() {
         console.log('[WebRtcMedia] Creating RTCPeerConnection');
 
@@ -462,7 +476,16 @@ export class WebRtcMedia {
         const config = this._rtcConfiguration(iceServers);
         console.log('[WebRtcMedia] ICE servers:', JSON.stringify(iceServers));
 
-        this.pc = new RTCPeerConnection(config);
+        // Missing or forbidden: thrown from onopen, nothing heard it and the
+        // rung hung. Reported instead, as WebRtcDataChannel does.
+        try {
+            this.pc = new RTCPeerConnection(config);
+        } catch (e) {
+            console.error('[WebRtcMedia] Cannot create a peer connection:', e && e.message);
+            this.pc = null;
+            this._onError(WEBRTC_UNAVAILABLE);
+            return false;
+        }
 
         // --- ICE candidate handler (filter TURN, prioritize UDP) ---
         this.pc.onicecandidate = (evt) => {
@@ -589,6 +612,7 @@ export class WebRtcMedia {
         this._createDataChannels();
 
         console.log('[WebRtcMedia] PC created, waiting for SDP offer...');
+        return true;
     }
 
     _createDataChannels() {
@@ -777,6 +801,11 @@ export class WebRtcMedia {
         }
 
         try {
+            // Normally made on the socket's open; an offer that comes without
+            // one (closed meanwhile, or never made) ends here, in the try.
+            if (!this.pc) {
+                if (this._stopping || !this._createPeerConnection()) return;
+            }
             // Validate codec support before committing
             const codecOk = this._validateCodecSupport(sdp);
             if (!codecOk) {

@@ -24,6 +24,7 @@
  */
 import { WebRtcDataChannel } from '../api/WebRtcDataChannel.js';
 import { WebRtcMedia } from '../api/WebRtcMedia.js';
+import { connectWatchdogMs } from '../api/WebRtcSupport.js';
 import { BackendClient } from '../api/BackendClient.js';
 import { Toast } from './Toast.js';
 import { StatsGraph } from './StatsGraph.js';
@@ -1034,6 +1035,8 @@ export class StreamView {
         this._everConnected = false;
         /** Guard so onConnectionFailed fires at most once per session. */
         this._connectionFailureReported = false;
+        /** The connect watchdog (_armConnectWatchdog), until the rung opens. */
+        this._connectWatchdog = null;
 
         // ── UPnP status ─────────────────────────────────────────────────────
         // UPnP toasts intentionally suppressed: they have no value during a
@@ -5286,8 +5289,42 @@ export class StreamView {
     // WebRTC DataChannel (replaces legacy WebSocket binary transport)
     // =========================================================================
 
+    /**
+     * The rung has connectWatchdogMs() from now to open (onOpen), or it is
+     * handed to the transport chain as failed. Every transport keeps its own
+     * deadlines; this one catches the failure none of them sees — a peer
+     * connection that never came, a socket a proxy holds open — which before
+     * left the page on "Connecting…" for good.
+     */
+    _armConnectWatchdog() {
+        this._clearConnectWatchdog();
+        const ms = connectWatchdogMs(this._transport);
+        this._connectWatchdog = setTimeout(() => {
+            this._connectWatchdog = null;
+            if (this._everConnected || this._quitting || this._manualQuitting) return;
+            console.error(
+                '[StreamView] ' +
+                    (this._transport || 'transport') +
+                    ' not open ' +
+                    ms / 1000 +
+                    's after start',
+            );
+            if (this._reportConnectionFailed('connect_timeout')) return;
+            this.setStatus('error', 'Connection timed out');
+            this.quit();
+        }, ms);
+    }
+
+    _clearConnectWatchdog() {
+        if (this._connectWatchdog) {
+            clearTimeout(this._connectWatchdog);
+            this._connectWatchdog = null;
+        }
+    }
+
     setupWebRtc() {
         this.webrtc.onOpen = () => {
+            this._clearConnectWatchdog();
             // _manualQuitting: Stop pressed while connecting — don't spin up the
             // decoder/renderer, quit() is about to tear everything down.
             if (this._quitting || this._manualQuitting) return;
@@ -5615,6 +5652,7 @@ export class StreamView {
         if (!this._nativeAudio) {
             this.webrtc.onAudio = (sample) => this.handleAudioSample(sample);
         }
+        this._armConnectWatchdog();
         this.webrtc.connect();
     }
 
@@ -12777,6 +12815,7 @@ export class StreamView {
             clearTimeout(this._noVideoTimer);
             this._noVideoTimer = null;
         }
+        this._clearConnectWatchdog();
         if (this._overlayEl) {
             this._overlayEl.style.display = 'none';
         }

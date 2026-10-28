@@ -524,6 +524,8 @@ describe('BackendClient request shaping', () => {
             token: 'tok',
             height: 1080,
             ride_out_loss: true,
+            // jsdom has no RTCPeerConnection: told as it is.
+            capabilities: { webrtc: false },
         });
 
         const forced = mockFetch(jsonResponse({ ok: true }));
@@ -533,6 +535,7 @@ describe('BackendClient request shaping', () => {
             height: 1080,
             aspect: '16:9',
             ride_out_loss: true,
+            capabilities: { webrtc: false },
         });
     });
 
