@@ -411,23 +411,125 @@ is the native unit the `.deb` and `.rpm` install.
 
 ---
 
-## Running as a non-root user
+## Hardening, and volume permissions
 
-The image runs as root so it can bind 80 and 443, with every capability except
-`NET_BIND_SERVICE` dropped. To run as somebody else, move the listeners above
-1024 **and** give that user the volume — a fresh named volume is created
-root-owned, and the container has no privilege left to fix that itself:
+### A hardened compose file
 
-```sh
-mkdir -p /srv/moonlightweb && chown 1000:1000 /srv/moonlightweb
-docker run -d --name moonlightweb --network host \
-  --user 1000:1000 --cap-drop ALL \
-  -e MW_HTTP_PORT=8080 -e MW_HTTPS_PORT=8443 \
-  -v /srv/moonlightweb:/data \
-  ghcr.io/linckosz/moonlight-web:latest
+Everything the server writes goes to `/data` or to `/tmp`, so the image runs
+with no capabilities at all, a read-only root filesystem and a user of your
+choosing:
+
+```yaml
+services:
+  moonlightweb:
+    image: ghcr.io/linckosz/moonlight-web:latest
+    container_name: moonlightweb
+    restart: unless-stopped
+    network_mode: host
+
+    user: "1000:1000"                         # owns /opt/moonlightweb/data
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs:
+      - /tmp                                  # Qt's runtime directory and temporary files
+
+    volumes:
+      - /opt/moonlightweb/data:/data
+
+    environment:
+      TZ: Etc/UTC
+      # A user other than root cannot bind 80/443 on the host network.
+      MW_HTTP_PORT: 8080
+      MW_HTTPS_PORT: 8443
+
+    healthcheck:
+      test: ["CMD", "moonlightweb", "--status"]
+      interval: 30s
+      timeout: 10s
+      start_period: 60s
+      retries: 3
 ```
 
-The URL becomes `https://<server-ip>:8443`.
+Give that user the directory **before** the first start — the container has no
+privilege left to do it itself:
+
+```sh
+sudo mkdir -p /opt/moonlightweb/data
+sudo chown 1000:1000 /opt/moonlightweb/data
+docker compose up -d
+```
+
+The URL becomes `https://<server-ip>:8443`. Any uid works, as long as it owns
+the directory; there is no user to create in the image.
+
+**Why the ports move.** On the host network the kernel's
+`net.ipv4.ip_unprivileged_port_start` is the host's (1024), and Docker does not
+raise an added capability for a user other than root — `cap_add:
+[NET_BIND_SERVICE]` shows up in the bounding set and nowhere else, so 443 still
+refuses to bind. To keep 80/443, run as root instead: drop `user:`, add
+`cap_add: ["NET_BIND_SERVICE"]`, and keep the rest (`cap_drop`, `security_opt`,
+`read_only`, `tmpfs`). Root then needs the directory to be its own:
+`sudo chown 0:0 /opt/moonlightweb/data`, or a named volume, which Docker creates
+root-owned. On a bridge network Docker sets that sysctl to 0 inside the
+container, which is why `docker-compose.bridge.yml` needs no capability.
+
+**`read_only` needs the `tmpfs`.** Without it the entrypoint cannot create
+`$XDG_RUNTIME_DIR` under `/tmp`, and says so instead of starting.
+
+### Volume permissions
+
+A container started with `cap_drop: ALL` cannot write to a directory its uid is
+not allowed to write to — **including root**: dropping every capability drops
+`CAP_DAC_OVERRIDE`, the one that lets root ignore file permissions. The usual
+way to hit this is a bind mount owned by your own user (`/opt/moonlightweb/data`
+created as uid 1000) with the container running as root, or the reverse: a
+root-owned named volume with `user: "1000:1000"`.
+
+The entrypoint checks before anything starts — the data directory, the
+QSettings directory, every subdirectory an earlier run left there, and
+`/tmp` — and stops with exit code 1 and a report like this in `docker logs`:
+
+```text
+entrypoint: cannot write to the volume at /data, where MoonlightWeb keeps
+its settings, certificate and paired hosts. Not starting.
+
+  needed      /data/.local/share/MoonlightWeb/MoonlightWeb
+  found       /data  owner 1000:1000  mode 755
+  error       Permission denied
+  running as  uid 0, gid 0, without CAP_DAC_OVERRIDE (cap_drop: ALL):
+              root can only write where uid 0 or gid 0 is allowed to
+
+Fix one of these on the Docker host, then start the container again:
+
+  1. Give the directory to the user the container runs as:
+       sudo chown -R 0:0 <host directory mounted at /data>
+       sudo chmod -R u+rwX <host directory mounted at /data>
+  2. Run the container as the directory's owner instead:
+       docker run --user 1000:1000 ...      compose: user: "1000:1000"
+     (on the host network a user other than root cannot bind 80/443,
+     even with NET_BIND_SERVICE: set MW_HTTP_PORT=8080, MW_HTTPS_PORT=8443)
+  3. Give root back the right to override file permissions:
+       docker run --cap-add DAC_OVERRIDE ...
+       compose: cap_add: [NET_BIND_SERVICE, DAC_OVERRIDE]
+
+See "Volume permissions" in docker/README.md.
+```
+
+In order of preference: **1** or **2** keep the container capability-free; **3**
+works, but hands root back the right to write anywhere it can see. (`CHOWN` is
+not needed: nothing in the image changes an owner.) A named volume has no host
+directory to `chown`; fix it from a throwaway container:
+
+```sh
+docker run --rm -v mw-data:/data debian:trixie-slim chown -R 1000:1000 /data
+```
+
+With `restart: unless-stopped` Docker keeps retrying, with a back-off that grows
+to a minute — the report repeats until the volume is fixed, and nothing is
+written in the meantime. `docker exec … moonlightweb --status` and the other
+operator commands skip the check: they talk to a running server and write
+nothing.
 
 ---
 
@@ -457,6 +559,11 @@ rebuilding on a patched base is how this image gets its security updates.
 by a previous container. The entrypoint deletes it on every start — if you see
 this, you are running the binary without the entrypoint. Delete
 `/data/.local/share/MoonlightWeb/MoonlightWeb/moonlightweb.lock`.
+
+**The container restarts, and `docker logs` says `entrypoint: cannot write to
+the volume at /data`.** The volume belongs to another uid, and with
+`cap_drop: ALL` not even root may write to it. The report names the owner it
+found and the uid it runs as; see [Volume permissions](#volume-permissions).
 
 **`HTTPS server started on port 8443`** (not 443). Something else on the host
 already holds 443 — on host networking that is a real conflict with a reverse
