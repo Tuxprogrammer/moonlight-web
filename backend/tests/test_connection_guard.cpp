@@ -101,4 +101,105 @@ void run_connection_guard_tests()
         CHECK_EQ(g.trackedIpCount(), 1); // idle one dropped, banned one kept
         CHECK(g.isBanned("203.0.113.51", t0 + CG::IDLE_PURGE_MS + 1));
     }
+
+    // ── Behind a reverse proxy (trusted_proxies) ─────────────────────────────
+    const ClientAddress::TrustedProxies proxies =
+        ClientAddress::parseList({"203.0.113.200", "2001:db8:aaaa::/48"});
+    // The proxy is exempt from both detectors once named — even on a public
+    // address, where every client's connections and failures would add up.
+    {
+        CG g;
+        g.setTrustedProxies(proxies);
+        CHECK_EQ(g.trustedProxies().size(), 2);
+        CHECK(g.isExemptHere("203.0.113.200"));
+        CHECK(g.isExemptHere("::ffff:203.0.113.200"));
+        CHECK(g.isExemptHere("2001:db8:aaaa::5"));
+        CHECK(g.isExemptHere("10.0.0.5")); // the LAN, as before
+        CHECK(!g.isExemptHere("203.0.113.201"));
+        CHECK(!CG::isExempt("203.0.113.200")); // the static rule is unchanged
+
+        bool refused = false;
+        for (int i = 0; i <= CG::CONN_MAX_PER_WINDOW * 2; ++i)
+            if (!g.allowConnection("203.0.113.200", t0 + i)) refused = true;
+        for (int i = 0; i < CG::AUTHFAIL_MAX * 2; ++i)
+            g.reportAuthFailure("203.0.113.200", t0 + i);
+        CHECK(!refused);
+        CHECK(!g.isBanned("203.0.113.200", t0 + 1));
+        CHECK_EQ(g.trackedIpCount(), 0);
+    }
+    // Without the list the same public proxy would be banned, as today.
+    {
+        CG g;
+        for (int i = 0; i < CG::AUTHFAIL_MAX; ++i)
+            g.reportAuthFailure("203.0.113.200", t0 + i);
+        CHECK(g.isBanned("203.0.113.200", t0 + CG::AUTHFAIL_MAX));
+    }
+    // Failures attributed to the forwarded client ban that client alone, and
+    // it is refused per request while the proxy's socket stays welcome.
+    {
+        CG g;
+        g.setTrustedProxies(proxies);
+        const QString proxy = "203.0.113.200";
+        const QString client = "198.51.100.23";
+        const QString other = "198.51.100.24";
+        for (int i = 0; i < CG::AUTHFAIL_MAX; ++i)
+            g.reportAuthFailure(client, t0 + i);
+        const qint64 later = t0 + CG::AUTHFAIL_MAX;
+        CHECK(g.isBanned(client, later));
+        CHECK(!g.isBanned(other, later));
+        CHECK(!g.isBanned(proxy, later));
+        CHECK(g.allowConnection(proxy, later)); // the proxy's socket
+        CHECK(!g.allowRequest(client, proxy, later));
+        CHECK(g.allowRequest(other, proxy, later));
+        CHECK(g.banSecondsRemaining(client, later) > 0);
+        // The ban runs out like any other.
+        CHECK(g.allowRequest(client, proxy, t0 + CG::BAN_MS + CG::AUTHFAIL_MAX + 1));
+    }
+    // allowRequest leaves direct peers to accept(): a request from the banned
+    // peer's own socket is not judged twice, and no client means no verdict.
+    {
+        CG g;
+        for (int i = 0; i < CG::AUTHFAIL_MAX; ++i)
+            g.reportAuthFailure("198.51.100.30", t0 + i);
+        const qint64 later = t0 + CG::AUTHFAIL_MAX;
+        CHECK(g.allowRequest("198.51.100.30", "198.51.100.30", later));
+        CHECK(g.allowRequest("198.51.100.30", "::ffff:198.51.100.30", later));
+        CHECK(g.allowRequest("", "203.0.113.200", later));
+        CHECK(!g.allowConnection("198.51.100.30", later)); // accept() still refuses
+    }
+    // A forwarded client on a private address stays exempt, as on the LAN:
+    // the proxy wrote that address, so that client really is on the LAN.
+    {
+        CG g;
+        g.setTrustedProxies(proxies);
+        for (int i = 0; i < CG::AUTHFAIL_MAX * 2; ++i)
+            g.reportAuthFailure("192.168.1.77", t0 + i);
+        CHECK(!g.isBanned("192.168.1.77", t0 + CG::AUTHFAIL_MAX * 2));
+        CHECK(g.allowRequest("192.168.1.77", "203.0.113.200", t0 + CG::AUTHFAIL_MAX * 2));
+        CHECK_EQ(g.trackedIpCount(), 0);
+    }
+    // One key per address: an IPv4-mapped accept() and a plain forwarded entry
+    // count together, so a ban earned through the proxy also holds when the
+    // same client connects directly.
+    {
+        CG g;
+        for (int i = 0; i < CG::AUTHFAIL_MAX / 2; ++i)
+            g.reportAuthFailure("::ffff:198.51.100.40", t0 + i);
+        for (int i = 0; i < CG::AUTHFAIL_MAX / 2; ++i)
+            g.reportAuthFailure("198.51.100.40", t0 + 100 + i);
+        CHECK_EQ(g.trackedIpCount(), 1);
+        CHECK(g.isBanned("198.51.100.40", t0 + 200));
+        CHECK(!g.allowConnection("::ffff:198.51.100.40", t0 + 201));
+        // IPv6 spelled two ways is one address too.
+        g.reportAuthFailure("2001:DB8:0:0::9", t0);
+        g.reportAuthFailure("2001:db8::9", t0 + 1);
+        CHECK_EQ(g.trackedIpCount(), 2);
+    }
+    // An empty list changes nothing.
+    {
+        CG g;
+        g.setTrustedProxies({});
+        CHECK(!g.isExemptHere("203.0.113.200"));
+        CHECK(g.isExemptHere("127.0.0.1"));
+    }
 }
