@@ -10,7 +10,7 @@ Everything the frontend (or any client) can call. Routes are registered in `back
 
 - 🌐 *public* — no auth (also exempted from the 401 guard: `health`, `server/hostname`, `auth/*`).
 - 🔑 *session* — localhost, or a valid `mw_session` cookie.
-- 🏠 *admin* — `req.isLocal`, i.e. a **loopback peer, a host-key session** (the host's own browser, arriving through the entry link with a single-use key) **or a session that unlocked the remote admin password** — on the LAN, or from the internet when the owner allows it ([Security §6.2.1](06-Security.md#621-remote-admin-password-lan-internet-on-request)) — **and** the admin key on writes (below). `/api/admin/*` returns 403 otherwise; the setup/internet/system/local routes apply the same check inside their handlers.
+- 🏠 *admin* — `req.isLocal`, i.e. a **loopback peer, a host-key session** (the host's own browser, arriving through the entry link with a single-use key), **a session that unlocked the remote admin password** — on the LAN, or from the internet when the owner allows it ([Security §6.2.1](06-Security.md#621-remote-admin-password-lan-internet-on-request)) — **or an OpenID Connect session of an `oidc_admin_groups` member**, off the tunnel ([§6.2.3](06-Security.md#623-openid-connect-sign-in)) — **and** the admin key on writes (below). `/api/admin/*` returns 403 otherwise; the setup/internet/system/local routes apply the same check inside their handlers.
 - 🖥️ *host machine* — `req.isHostMachine`: 🏠 minus the password unlock. Reserved for what needs the local desktop or identifies the host itself (`local_key`, the first-run wizard).
 - 🍪 *invited player* — the `mw_player` cookie bound to one live share activation ([§8.3b](#83b-session-sharing-shareroutescpp)). Not a session: it opens that player's own slot and nothing else, and is exempt from the 401 guard like 🌐.
 
@@ -43,9 +43,10 @@ WebSocket upgrades are screened the same way on `Origin` (they bypass CORS entir
 
 | Method & path | Access | Description |
 |---|---|---|
-| `POST /api/auth/validate` | 🌐 | Body `{pin}` or certificate upload → sets `mw_session` cookie. Optional `remember` (default `true`): `false` gives a session-scoped cookie (no `Max-Age`) and an ephemeral session — 8 h idle TTL, never persisted (§6.3). Rate-limited (remaining attempts / lockout seconds in the response). Consumed PIN auto-regenerates. |
+| `POST /api/auth/validate` | 🌐 | Body `{pin}` or certificate upload → sets `mw_session` cookie. **403 `pin_disabled`** for both while `oidc_disable_pin` is in force. Optional `remember` (default `true`): `false` gives a session-scoped cookie (no `Max-Age`) and an ephemeral session — 8 h idle TTL, never persisted (§6.3). Rate-limited (remaining attempts / lockout seconds in the response). Consumed PIN auto-regenerates. |
 | `POST /api/auth/logout` | 🌐 | Destroys the caller's *own* session (raw cookie token only, so it can reach no other) and expires the cookie. Answers `{status, had_session}` — `had_session: false` for a stale or absent cookie, which is cleared anyway. A streaming session's relay is torn down as with any revocation. |
-| `GET /api/auth/status` | 🌐 | Session validity, `has_session` (this browser holds a valid `mw_session` cookie — true even on localhost, where `authenticated` is granted by address), `is_localhost` (has admin), `is_host_machine`, `admin_unlock_available`, `remote_admin_enabled` + `remote_admin_internet` + `admin_password_set` (admin only), whether a PIN exists, cert-auth enabled. Refreshes the cookie, keeping an ephemeral session session-scoped. |
+| `GET /api/auth/status` | 🌐 | Session validity, `has_session` (this browser holds a valid `mw_session` cookie — true even on localhost, where `authenticated` is granted by address), `is_localhost` (has admin), `is_host_machine`, `admin_unlock_available`, `remote_admin_enabled` + `remote_admin_internet` + `admin_password_set` (admin only), whether a PIN exists, cert-auth enabled, and `oidc: {enabled, label, pin_disabled}` — `enabled` is false through the tunnel, in booth mode and on an origin not listed in `public_url`. An OIDC session also gets `auth_method: "oidc"` and `display_name`. Refreshes the cookie, keeping an ephemeral session session-scoped and an OIDC session's absolute end. |
+| `POST /api/auth/pairing-key` | 🔑 | Body `{public_key}` (SPKI, Base64) → binds this browser's MW-BIND-v1 key to its session and returns the host's (`host_public_key`, `host_id`). Silent trust-on-first-use: from a loopback, LAN or tunnel peer, or within 10 minutes of an OpenID Connect login from anywhere; otherwise 403. 409 when a different key is already bound. |
 | `POST /api/auth/regenerate` | 🏠 | New PIN + invalidate all sessions. |
 | `POST /api/admin/pin/generate` / `POST /api/admin/pin/clear` | 🏠 | Manage the PIN. |
 | `POST /api/auth/admin-unlock` | 🔑 LAN | Body `{password}` → promotes this session to admin. Requires a LAN peer **and** a trusted `Host` (on the tunnel, the LAN address ICE settled on) — or, when `remote_admin_internet` is on, any peer that came through the rendezvous tunnel — plus an existing session, remote administration enabled **and** a password actually set (there is no built-in default); own rate-limit bucket, and one shared by every attempt from outside the LAN (401 `invalid_password`, 429 `rate_limited`, 403 `lan_only`/`not_configured`). Answers `ok` without spending an attempt when the caller is already an admin. |
@@ -54,6 +55,18 @@ WebSocket upgrades are screened the same way on `Origin` (they bypass CORS entir
 | `POST /api/auth/sessions/revoke` | 🏠 | Revoke by opaque id; a streaming session's relay is torn down immediately. Refuses the caller's own session (409 `cannot_revoke_self`). |
 | `GET /api/admin/certificate/download` / `POST /api/admin/certificate/regenerate` | 🏠 | Certificate-file auth token. |
 | `POST /api/auth/host-key` | 🌐 | Redeem the host key (`#k=` from the owner's entry link, or `?mwk=` on a local address) → host session; rotates the key. |
+
+### OpenID Connect (`OidcRoutes.cpp`)
+
+Browser navigations rather than API calls, so outside `/api/` — the provider's redirect back is cross-site, which the API's gate refuses — and dispatched ahead of the static files. The two browser routes answer 404 through the tunnel, in booth mode, or while the login is not usable. A refusal is a `302 /?oidc_error=<code>`: `invalid_state`, `wrong_origin`, `idp_error`, `idp_unreachable`, `token_exchange`, `invalid_token`, `not_allowed`, `rate_limited`.
+
+| Method & path | Access | Description |
+|---|---|---|
+| `GET /auth/oidc/start` | 🌐 | 302 to the provider's authorization endpoint (code flow, PKCE S256, `state`, `nonce`) with a `mw_oidc` cookie binding the attempt to this browser. 403 on an origin not listed in `public_url`. |
+| `GET /auth/oidc/callback` | 🌐 | `?code&state` from the provider → verifies, then **200** with a page that meta-refreshes to `/` and sets `mw_session` (`Max-Age` = `oidc_session_ttl_hours`). Single use; must be the browser and the origin that started. |
+| `GET /api/admin/oidc` | 🏠 | Every `oidc_*` setting and `public_url`, plus `client_secret_set`, `client_secret_source` (`none`/`settings`/`env`/`env_file`), `redirect_uris` (what to register at the provider), `usable` and `problem`. Never the secret. |
+| `POST /api/admin/oidc` | 🏠 | Any subset of `enabled, issuer, client_id, client_secret` (write-only; empty = unchanged), `clear_client_secret, scopes, groups_claim, allowed_groups, admin_groups` (array or comma-separated), `button_label, disable_pin, session_ttl_hours, public_url` (array or comma-separated). All or nothing: 400 `invalid_<key>`, or `incomplete` + `problem` when enabling a login that could not run. A change to who may sign in ends every OIDC session (`sessions_ended`). |
+| `POST /api/admin/oidc/test` | 🏠 | Body `{issuer}` (default: the saved one) → fetches discovery and the key set, bypassing the cache: `{ok, issuer, authorization_endpoint, token_endpoint, jwks_uri, keys, error}`. Always 200. |
 
 ## 8.3 Hosts & streaming (`HostRoutes.cpp` + `main.cpp`)
 

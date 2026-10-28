@@ -342,7 +342,9 @@ The upscaler, **MWSR**, is under the MIT License and packaged for other programs
 The **Admin** page configures the server itself. It opens on the local machine (`https://localhost/admin`, or tray icon → *Server Settings*), and on another device only once you set a **Remote administration** password: from your LAN, or through your entry link if you tick that too.\
 Any other request to `/api/admin/*` gets **403**.
 
-It controls: admin **PIN**, active **sessions**, HTTP/HTTPS **ports**, **transport** (WebRTC/WSS), **Internet access**, and the **certificate token**.
+It controls: admin **PIN**, active **sessions**, HTTP/HTTPS **ports**, **transport** (WebRTC/WSS), **Internet access**, the **certificate token**, and **OpenID Connect** sign-in.
+
+**Sign in with your own identity provider (optional).** Point MoonlightWeb at Authentik, Keycloak, Authelia, Pocket ID or any OpenID Connect provider and the login page offers *Sign in with …* next to the PIN, or instead of it. Groups decide who may sign in and who gets the admin page. Not offered through the entry link, where visitors keep the PIN. See [Security §6.2.3](docs/wiki/06-Security.md#623-openid-connect-sign-in).
 
 <div align="center">
 
