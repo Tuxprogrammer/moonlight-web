@@ -1636,35 +1636,55 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
     // this handler ensures the target socket is not left dangling.
     QObject::connect(clientSocket, &QTcpSocket::disconnected, cleanup);
 
-    QObject::connect(
-        target, &QTcpSocket::connected, [clientSocket, target, upgradeRequest, guard]() {
-            // Late connection after cleanup: tear down and return.
-            if (*guard) {
-                target->disconnectFromHost();
-                return;
-            }
+    // The local connect, retried while the slot's worker is still starting (or
+    // being replaced on the same port by a relaunch). A connect that cannot
+    // succeed is answered with a real status BEFORE the upgrade — 503 +
+    // Retry-After, or 404 — instead of a closed socket that a proxy in front
+    // turns into a 502 of its own. The control channel is in-process: a
+    // refusal there is not a worker starting, so it is not retried.
+    const int stateSlot = path == QLatin1String("/ws/control") ? -1 : wsSlot;
+    auto slotState = [this, stateSlot]() {
+        if (stateSlot < 0 || !m_SlotState) return wsproxy::SlotState::Idle;
+        return m_SlotState(stateSlot);
+    };
 
-            // Forward the initial HTTP upgrade request to the signaling server.
-            // This includes all headers (Upgrade, Sec-WebSocket-Key, etc.).
-            target->write(upgradeRequest);
+    auto onConnected = [clientSocket, target, upgradeRequest, guard, cleanup]() {
+        // Late connection after cleanup: tear down and return.
+        if (*guard) {
+            target->disconnectFromHost();
+            return;
+        }
 
-            // Bidirectional forwarding: client <-> signaling server.
-            QObject::connect(clientSocket, &QTcpSocket::readyRead,
-                             [clientSocket, target]() { target->write(clientSocket->readAll()); });
-            QObject::connect(target, &QTcpSocket::readyRead,
-                             [clientSocket, target]() { clientSocket->write(target->readAll()); });
-        });
+        // Forward the initial HTTP upgrade request to the signaling server.
+        // This includes all headers (Upgrade, Sec-WebSocket-Key, etc.).
+        target->write(upgradeRequest);
 
-    // Post-connect cleanup: when either side disconnects or errors out.
-    QObject::connect(target, &QTcpSocket::disconnected, cleanup);
-    QObject::connect(target, &QAbstractSocket::errorOccurred,
-                     [target, cleanup](QAbstractSocket::SocketError) {
-                         qWarning() << "[HttpServer] WebSocket proxy: connection error:"
-                                    << target->errorString();
-                         cleanup();
-                     });
+        // Bidirectional forwarding: client <-> signaling server.
+        QObject::connect(clientSocket, &QTcpSocket::readyRead,
+                         [clientSocket, target]() { target->write(clientSocket->readAll()); });
+        QObject::connect(target, &QTcpSocket::readyRead,
+                         [clientSocket, target]() { clientSocket->write(target->readAll()); });
 
-    target->connectToHost(QHostAddress::LocalHost, targetPort);
+        // Post-connect cleanup: when either side disconnects or errors out.
+        QObject::connect(target, &QTcpSocket::disconnected, cleanup);
+        QObject::connect(target, &QAbstractSocket::errorOccurred,
+                         [target, cleanup](QAbstractSocket::SocketError) {
+                             qWarning() << "[HttpServer] WebSocket proxy: connection error:"
+                                        << target->errorString();
+                             cleanup();
+                         });
+    };
+
+    auto onFailed = [this, clientSocket, target, guard, path, targetPort](wsproxy::Verdict v) {
+        qWarning() << "[HttpServer] WebSocket proxy: nothing listening for" << path << "on"
+                   << targetPort << "(" << target->errorString() << ") — answering"
+                   << (v == wsproxy::Verdict::NotFound ? 404 : 503);
+        if (*guard) return;
+        // The client's own disconnect then runs the cleanup (pre-connect handler).
+        sendResponse(clientSocket, wsproxy::response(v));
+    };
+
+    wsproxy::connectWithRetry(target, targetPort, slotState, onConnected, onFailed);
 }
 
 void HttpServer::sendResponse(QTcpSocket* socket, const HttpResponse& response,
@@ -1698,6 +1718,7 @@ void HttpServer::sendResponse(QTcpSocket* socket, const HttpResponse& response,
     case 431: statusText = "Request Header Fields Too Large"; break;
     case 500: statusText = "Internal Server Error"; break;
     case 501: statusText = "Not Implemented"; break;
+    case 503: statusText = "Service Unavailable"; break;
     case 504: statusText = "Gateway Timeout"; break;
     default: statusText = "Unknown"; break;
     }
