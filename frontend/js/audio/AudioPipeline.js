@@ -186,7 +186,13 @@ export class AudioPipeline {
             }
             if (!this._useWorker) {
                 console.warn('[AudioPipeline] Decode worker unavailable — main-thread decode');
-                if (!(await this._setupDecoder())) {
+                const decoderOk = await this._setupDecoder();
+                // Guard: a relaunch may have closed us while the decoder was set up
+                if (this._closed) {
+                    this.cleanup();
+                    return false;
+                }
+                if (!decoderOk) {
                     console.error(
                         '[AudioPipeline] No Opus decoder available — audio will be silent',
                     );
@@ -571,16 +577,19 @@ export class AudioPipeline {
      * @returns {Promise<boolean>} true if context is now running.
      */
     async resume() {
-        if (!this.context || this._closed) return false;
+        // Hold the context: close() (a fast relaunch) nulls this.context mid-await.
+        const ctx = this.context;
+        if (!ctx || this._closed) return false;
 
-        if (this.context.state === 'suspended') {
+        if (ctx.state === 'suspended') {
             try {
-                await this.context.resume();
-                console.log('[AudioPipeline] AudioContext resumed');
+                await ctx.resume();
             } catch (err) {
-                console.warn('[AudioPipeline] Resume failed:', err.message);
+                if (!this._closed) console.warn('[AudioPipeline] Resume failed:', err.message);
                 return false;
             }
+            if (this._closed) return false;
+            console.log('[AudioPipeline] AudioContext resumed');
         }
 
         // Promote the iOS audio session on this same user activation (no-op off
@@ -588,7 +597,7 @@ export class AudioPipeline {
         // retry whenever resume() runs in-gesture.
         iosAudioUnlock.unlock();
 
-        return this.context.state === 'running';
+        return ctx.state === 'running';
     }
 
     /**
