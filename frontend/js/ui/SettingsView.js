@@ -163,6 +163,9 @@ export class SettingsView {
         // Enter fullscreen at launch (off by default): asked on the launch
         // click, the only moment a browser lets a page go fullscreen.
         this._fullscreenOnStart = false;
+        // Clipboard (ui/ClipboardPanel.js reads them at use): both off.
+        this._clipboardSyncOnFocus = false;
+        this._clipboardCtrlVTypes = false;
         this._touchSensitivity = 2.2;
         this._mouseSensitivity = 1;
         // Mobile only: direct touch-screen input (absolute) instead of the
@@ -609,6 +612,8 @@ export class SettingsView {
         this._muteHostAudio = data.mute_host_audio !== false;
         this._quitAppOnStop = data.quit_app_on_stop === true;
         this._fullscreenOnStart = data.fullscreen_on_start === true;
+        this._clipboardSyncOnFocus = data.clipboard_sync_on_focus === true;
+        this._clipboardCtrlVTypes = data.clipboard_ctrlv_types === true;
         this._touchSensitivity =
             typeof data.touch_sensitivity === 'number' && data.touch_sensitivity > 0
                 ? data.touch_sensitivity
@@ -820,6 +825,8 @@ export class SettingsView {
             // Per-device only (server ignores these unknown fields).
             quit_app_on_stop: this._quitAppOnStop,
             fullscreen_on_start: this._fullscreenOnStart,
+            clipboard_sync_on_focus: this._clipboardSyncOnFocus,
+            clipboard_ctrlv_types: this._clipboardCtrlVTypes,
             power_save: this._powerSave,
             power_save_backup: this._powerSaveBackup,
             gamepad_profile: this._gamepadProfile,
@@ -1323,6 +1330,8 @@ export class SettingsView {
         this._muteHostAudio = true;
         this._quitAppOnStop = false;
         this._fullscreenOnStart = false;
+        this._clipboardSyncOnFocus = false;
+        this._clipboardCtrlVTypes = false;
         this._touchSensitivity = 2.2;
         this._mouseSensitivity = 1;
         this._touchScreen = false;
@@ -1889,6 +1898,28 @@ export class SettingsView {
                         <span class="setting-desc">${t('settings.fullscreenOnStartDesc')}</span>
                     </div>
 
+                    <div class="settings-field">
+                        <label class="settings-checkbox-label">
+                            <input type="checkbox" id="settings-clipboard-sync-focus"
+                                ${this._clipboardSyncOnFocus ? 'checked' : ''} />
+                            <span class="settings-checkbox-text">
+                                <strong>${t('settings.clipboardSyncOnFocus')}</strong>
+                            </span>
+                        </label>
+                        <span class="setting-desc">${t('settings.clipboardSyncOnFocusDesc')}</span>
+                    </div>
+
+                    <div class="settings-field">
+                        <label class="settings-checkbox-label">
+                            <input type="checkbox" id="settings-clipboard-ctrlv-types"
+                                ${this._clipboardCtrlVTypes ? 'checked' : ''} />
+                            <span class="settings-checkbox-text">
+                                <strong>${t('settings.clipboardCtrlVTypes')}</strong>
+                            </span>
+                        </label>
+                        <span class="setting-desc">${t('settings.clipboardCtrlVTypesDesc')}</span>
+                    </div>
+
                     <!-- Allow tearing: disables VSync pacing + desynchronized
                          canvas. Dimmed + locked "(unavailable)" outside Chromium
                          desktop — Safari/Firefox ignore the flag and mobile
@@ -2287,6 +2318,20 @@ export class SettingsView {
         if (fullscreenCheck)
             fullscreenCheck.addEventListener('change', () => {
                 this._fullscreenOnStart = fullscreenCheck.checked;
+                this._autoSave();
+            });
+
+        const clipFocusCheck = this.container.querySelector('#settings-clipboard-sync-focus');
+        if (clipFocusCheck)
+            clipFocusCheck.addEventListener('change', () => {
+                this._clipboardSyncOnFocus = clipFocusCheck.checked;
+                this._autoSave();
+            });
+
+        const clipTypesCheck = this.container.querySelector('#settings-clipboard-ctrlv-types');
+        if (clipTypesCheck)
+            clipTypesCheck.addEventListener('change', () => {
+                this._clipboardCtrlVTypes = clipTypesCheck.checked;
                 this._autoSave();
             });
 

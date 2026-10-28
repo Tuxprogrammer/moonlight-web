@@ -1,0 +1,174 @@
+/* MoonlightWeb — the stream's clipboard panel (ui/ClipboardPanel.js).
+ *
+ * A side panel over the right of the stream, Guacamole-style: the picture
+ * stays visible and clickable beside it, so the viewer can click where the
+ * text should go on the host and then press Type on host. On a phone it takes
+ * the whole width.
+ */
+
+.clipboard-panel {
+    position: fixed;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 900;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    box-sizing: border-box;
+    width: min(380px, 100%);
+    padding: 16px 16px max(16px, env(safe-area-inset-bottom));
+    overflow-y: auto;
+    background: var(--surface-1);
+    border-left: 1px solid var(--border-1);
+    box-shadow: -12px 0 40px rgba(0, 0, 0, 0.55);
+    color: var(--text-1);
+    touch-action: pan-y;
+}
+.clipboard-panel[hidden] {
+    display: none;
+}
+
+.clipboard-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+.clipboard-panel-head h3 {
+    margin: 0;
+    font-size: 17px;
+}
+.clipboard-panel-close {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border: 1px solid var(--border-1);
+    background: transparent;
+    color: var(--text-2);
+    font-size: 22px;
+    line-height: 1;
+    cursor: pointer;
+}
+.clipboard-panel-close:hover,
+.clipboard-panel-close:focus-visible {
+    color: var(--text-1);
+    border-color: var(--neon-cyan);
+}
+
+/* The mode line: cyan when the clipboard is shared, plain when typing. */
+.clipboard-panel-mode {
+    margin: 0;
+    padding: 8px 10px;
+    font-size: 13px;
+    line-height: 1.4;
+    color: var(--text-2);
+    background: var(--surface-2);
+    border-left: 3px solid var(--text-3);
+}
+.clipboard-panel-mode[data-mode='sync'] {
+    border-left-color: var(--neon-cyan);
+    color: var(--text-1);
+}
+.clipboard-panel-mode[data-mode='none'] {
+    border-left-color: var(--neon-magenta);
+}
+
+.clipboard-panel-label {
+    font-size: 11px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-2);
+}
+.clipboard-panel-text {
+    flex: 1 1 auto;
+    min-height: 140px;
+    box-sizing: border-box;
+    width: 100%;
+    padding: 10px;
+    resize: none;
+    font: 14px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    color: var(--text-1);
+    background: var(--surface-0);
+    border: 1px solid var(--border-1);
+    touch-action: auto;
+}
+.clipboard-panel-text:focus {
+    outline: none;
+    border-color: var(--neon-cyan);
+}
+
+.clipboard-panel-progress {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 13px;
+    color: var(--text-2);
+}
+.clipboard-panel-progress[hidden] {
+    display: none;
+}
+.clipboard-panel-progress progress {
+    flex: 1 1 auto;
+    min-width: 0;
+    accent-color: var(--neon-cyan);
+}
+.clipboard-panel-cancel {
+    padding: 6px 12px;
+}
+
+.clipboard-panel-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+.clipboard-panel-actions .btn {
+    flex: 1 1 140px;
+}
+.clipboard-panel-actions .btn[hidden] {
+    display: none;
+}
+
+.clipboard-panel-note {
+    min-height: 1.4em;
+    margin: 0;
+    font-size: 13px;
+    color: var(--text-1);
+}
+.clipboard-panel-hint {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-3);
+}
+
+/* The header button: the controller button's square. */
+.btn-stream-clip {
+    position: relative;
+    z-index: 300;
+    margin-right: 12px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 30px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.06);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    color: rgba(255, 255, 255, 0.65);
+    font-size: 18px;
+    cursor: pointer;
+    user-select: none;
+}
+.btn-stream-clip[hidden] {
+    display: none;
+}
+.btn-stream-clip:hover,
+.btn-stream-clip.active {
+    background: var(--kbd-on);
+    color: var(--kbd-on-edge);
+    border-color: var(--kbd-on-edge);
+}
+.btn-stream-clip:active {
+    transform: scale(0.95);
+}

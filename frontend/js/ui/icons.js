@@ -42,6 +42,11 @@ export const Icons = {
     keyboard: svg(
         '<rect x="2" y="6" width="20" height="12" rx="2"/><path d="M6 10h0M10 10h0M14 10h0M18 10h0M6 14h0M9 14h6M18 14h0"/>',
     ),
+    // Clipboard — the stream's clipboard panel
+    clipboard: svg(
+        '<rect x="8" y="2" width="8" height="4" rx="1"/>' +
+            '<path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/>',
+    ),
     // Gamepad — a share guest's controller check / remap button
     gamepad: svg(
         '<path d="M6.5 7h11a4.5 4.5 0 0 1 4.4 5.4l-.9 4.4a2.6 2.6 0 0 1-4.5 1.2L14.6 16H9.4l-1.9 2a2.6 2.6 0 0 1-4.5-1.2l-.9-4.4A4.5 4.5 0 0 1 6.5 7z"/>' +

@@ -100,3 +100,55 @@ describe('the rendered grid', () => {
         expect(html).not.toContain('stream.scQuit');
     });
 });
+
+describe('the clipboard panel rows', () => {
+    it('lists Ctrl+Alt+Shift+C, and the three keys alone (Guacamole’s gesture)', () => {
+        const rows = keyboardShortcutRows(false);
+        expect(rows.find((r) => r[0] === 'stream.scClipboard')).toEqual([
+            'stream.scClipboard',
+            'Shift',
+            'Ctrl',
+            'Alt',
+            'C',
+        ]);
+        expect(rows.find((r) => r[0] === 'stream.scClipboardBare')).toEqual([
+            'stream.scClipboardBare',
+            'Shift',
+            'Ctrl',
+            'Alt',
+        ]);
+    });
+
+    it('says Cmd+Option+Ctrl on a Mac', () => {
+        const rows = keyboardShortcutRows(true);
+        expect(rows.find((r) => r[0] === 'stream.scClipboard')).toEqual([
+            'stream.scClipboard',
+            'Ctrl',
+            'Option',
+            'Cmd',
+            'C',
+        ]);
+        expect(rows.find((r) => r[0] === 'stream.scClipboardBare').slice(1)).toEqual([
+            'Ctrl',
+            'Option',
+            'Cmd',
+        ]);
+    });
+
+    it('renders the bare chord as three keys and no fourth', () => {
+        const html = shortcutsGridHtml({ touch: false, isMac: false });
+        const row = html
+            .split('<div class="shortcut-row">')
+            .find((r) => r.includes('scClipboardBare'));
+        expect(row.match(/<kbd>/g)).toHaveLength(3);
+    });
+
+    it('points touch devices at the header button, in both touch models', () => {
+        for (const touchScreen of [false, true]) {
+            expect(gestureRows(touchScreen).find((r) => r[0] === 'stream.tcClipboard')).toEqual([
+                'stream.tcClipboard',
+                'stream.tcClipboardVal',
+            ]);
+        }
+    });
+});
