@@ -82,6 +82,7 @@
 #include "server/SingleSessionHosts.h"
 #include "server/StreamActivity.h"
 #include "server/routes/AuthRoutes.h"
+#include "server/routes/OidcRoutes.h"
 #include "server/routes/HostRoutes.h"
 #include "server/routes/HostAppRoutes.h"
 #include "server/routes/ShareRoutes.h"
@@ -2909,6 +2910,7 @@ int main(int argc, char* argv[])
     });
 
     registerAuthRoutes(server, authManager, geoIpService, appSettings);
+    registerOidcRoutes(server, authManager, appSettings);
 
     server.router()->get("/api/server/status", [&server](const HttpRequest&) {
         QJsonObject obj;

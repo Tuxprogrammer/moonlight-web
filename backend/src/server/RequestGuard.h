@@ -110,6 +110,7 @@ struct Context
     bool peerLocal = false;    ///< socket peer is this machine (HttpServer::isLocalRequest)
     bool hostSession = false;  ///< valid host-key session cookie
     bool adminSession = false; ///< session that unlocked admin with the remote password
+    bool oidcAdmin = false;    ///< OIDC session of an oidc_admin_groups member
     bool adminKeyOk = false;   ///< request carries the current admin key
     bool adminLocked = false;  ///< launched with --noadmin: nobody administers
     QString publicDomain;      ///< the domain we answer to, "" when none

@@ -180,6 +180,21 @@ void AuthManager::loadSessions()
         info.isHost = obj["is_host"].toBool(false);
         info.viaTunnel = obj["via_tunnel"].toBool(false);
         info.isAdmin = keepAdminFlags && obj["is_admin"].toBool(false);
+        info.authMethod = obj["auth_method"].toString();
+        info.subject = obj["subject"].toString();
+        info.displayName = obj["display_name"].toString();
+        info.oidcAdmin =
+            info.authMethod == QLatin1String("oidc") && obj["oidc_admin"].toBool(false);
+        info.expiresAt = static_cast<qint64>(obj["expires_at"].toDouble());
+
+        // An OIDC session outlives neither its own end nor the provider that
+        // vouched for it: with the login switched off, nothing would ever
+        // re-check who it belongs to.
+        if (info.authMethod == QLatin1String("oidc") &&
+            (info.expiresAt <= 0 || !Oidc::isUsable(m_settings->oidcSettings()))) {
+            skipped++;
+            continue;
+        }
 
         // MW-BIND-v1 pairing key. A stored key that no longer parses is dropped
         // rather than kept: the session survives, and the browser simply
@@ -190,9 +205,9 @@ void AuthManager::loadSessions()
             if (PairingCrypto::isValidP256Spki(spki)) info.pairingKey = spki;
         }
 
-        // Drop sessions that are already expired by inactivity.
+        // Drop sessions that are already expired by inactivity (or by their end).
         const qint64 last = info.lastSeen > 0 ? info.lastSeen : info.createdAt;
-        if (now - last > SESSION_TTL_SECS) {
+        if (now - last > SESSION_TTL_SECS || (info.expiresAt > 0 && now >= info.expiresAt)) {
             skipped++;
             continue;
         }
@@ -690,6 +705,13 @@ QString AuthManager::createSession(const QString& ip, const QString& machineName
     return token; // raw token for the cookie
 }
 
+bool AuthManager::isExpired(const SessionInfo& s, qint64 now)
+{
+    if (s.expiresAt > 0 && now >= s.expiresAt) return true;
+    const qint64 last = s.lastSeen > 0 ? s.lastSeen : s.createdAt;
+    return now - last > ttlFor(s);
+}
+
 bool AuthManager::validateSession(const QString& token) const
 {
     if (token.isEmpty()) return false;
@@ -697,9 +719,68 @@ bool AuthManager::validateSession(const QString& token) const
     if (it == m_sessions.end()) return false;
     // Sliding expiration: reject (but do not mutate, this is const) sessions
     // inactive past the TTL — the periodic purge removes them.
-    const qint64 now = QDateTime::currentSecsSinceEpoch();
-    const qint64 last = it->lastSeen > 0 ? it->lastSeen : it->createdAt;
-    return now - last <= ttlFor(*it);
+    return !isExpired(*it, QDateTime::currentSecsSinceEpoch());
+}
+
+QString AuthManager::createOidcSession(const QString& ip, const QString& subject,
+                                       const QString& displayName, bool admin, qint64 ttlSecs)
+{
+    const QString token = createSession(ip, displayName);
+    SessionInfo& s = m_sessions[hashToken(token)];
+    s.authMethod = QStringLiteral("oidc");
+    s.subject = subject;
+    s.displayName = displayName;
+    s.oidcAdmin = admin;
+    s.expiresAt = s.createdAt + qMax<qint64>(1, ttlSecs);
+    saveSessions();
+    emit sessionsChanged();
+    Logger::info(QString("[Auth] OIDC session for '%1' (%2), %3 h%4")
+                     .arg(displayName, subject)
+                     .arg(ttlSecs / 3600)
+                     .arg(admin ? QStringLiteral(", admin") : QString()));
+    return token;
+}
+
+bool AuthManager::isOidcSession(const QString& token) const
+{
+    if (!validateSession(token)) return false;
+    auto it = m_sessions.find(hashToken(token));
+    return it != m_sessions.end() && it->authMethod == QLatin1String("oidc");
+}
+
+bool AuthManager::isOidcAdminSession(const QString& token) const
+{
+    if (!validateSession(token)) return false;
+    auto it = m_sessions.find(hashToken(token));
+    return it != m_sessions.end() && it->authMethod == QLatin1String("oidc") && it->oidcAdmin;
+}
+
+int AuthManager::destroyOidcSessions()
+{
+    QStringList ids;
+    for (auto it = m_sessions.cbegin(); it != m_sessions.cend(); ++it)
+        if (it->authMethod == QLatin1String("oidc")) ids << it.key();
+    // destroySession, not a bare erase: a streaming one must be torn down too.
+    for (const QString& id : ids)
+        destroySession(id);
+    if (!ids.isEmpty()) Logger::info(QString("[Auth] Ended %1 OIDC session(s)").arg(ids.size()));
+    return static_cast<int>(ids.size());
+}
+
+namespace {
+const QString kOidcBucketPrefix = QStringLiteral("oidc|");
+} // namespace
+
+int AuthManager::oidcLockout(const QString& ip) const
+{
+    return bucketLockout(kOidcBucketPrefix + rateLimitKey(ip));
+}
+
+AuthManager::ValidateResult AuthManager::recordOidcAttempt(const QString& ip, bool ok)
+{
+    cleanupExpired();
+    return recordAttempt(kOidcBucketPrefix + rateLimitKey(ip), ok, ip,
+                         QStringLiteral("OIDC sign-in"));
 }
 
 bool AuthManager::isEphemeralSession(const QString& token) const
@@ -1008,8 +1089,7 @@ void AuthManager::purgeExpiredSessions()
     QMutableHashIterator<QString, SessionInfo> it(m_sessions);
     while (it.hasNext()) {
         it.next();
-        const qint64 last = it.value().lastSeen > 0 ? it.value().lastSeen : it.value().createdAt;
-        if (now - last > ttlFor(it.value())) {
+        if (isExpired(it.value(), now)) {
             it.remove();
             removed++;
         }

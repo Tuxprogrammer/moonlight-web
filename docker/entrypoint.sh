@@ -63,6 +63,20 @@ apply_setting() {
     fi
 }
 
+# Same, for a string: the value is passed as a JSON string, never parsed as JSON.
+apply_string_setting() {
+    _key=$1 _value=$2
+    [ -n "$_value" ] || return 0
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    _tmp="$SETTINGS.tmp"
+    if jq --arg v "$_value" ".\"$_key\" = \$v" "$SETTINGS" > "$_tmp" 2>/dev/null; then
+        mv "$_tmp" "$SETTINGS"
+    else
+        rm -f "$_tmp"
+        echo "entrypoint: could not set $_key in $SETTINGS (is it valid JSON?)" >&2
+    fi
+}
+
 apply_setting http_port "${MW_HTTP_PORT:-}"
 apply_setting https_port "${MW_HTTPS_PORT:-}"
 # UPnP port mapping is how a stream reaches a browser outside the LAN without
@@ -76,6 +90,14 @@ case "${MW_UPNP:-}" in
     0|no|false) apply_setting upnp_enabled false ;;
     1|yes|true) apply_setting upnp_enabled true ;;
 esac
+
+# OpenID Connect login (docs/design/oidc-login.md): the provider and the client
+# it knows us as, so a compose file can carry them. Everything else, enabling
+# the login included, is on the admin page. The client secret is NOT written
+# here: the server reads MW_OIDC_CLIENT_SECRET or MW_OIDC_CLIENT_SECRET_FILE
+# (a Docker secret) itself, and it never reaches settings.json.
+apply_string_setting oidc_issuer "${MW_OIDC_ISSUER:-}"
+apply_string_setting oidc_client_id "${MW_OIDC_CLIENT_ID:-}"
 
 # ── Stale single-instance lock ───────────────────────────────────────────────
 # main.cpp guards against a second server with a QLockFile whose staleness test

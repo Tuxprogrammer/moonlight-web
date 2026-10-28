@@ -75,6 +75,21 @@ struct SessionInfo
     // secret, and it never leaves the machine anyway.
     QByteArray pairingKey;
 
+    // OpenID Connect (docs/design/oidc-login.md). authMethod is "oidc" for a
+    // session minted by /auth/oidc/callback and empty for every older door
+    // (PIN, certificate file, host key). oidcAdmin comes from
+    // oidc_admin_groups and is deliberately NOT isAdmin: that flag belongs to
+    // the remote admin password, whose changes demote it, and the password has
+    // nothing to say about what the identity provider granted.
+    QString authMethod;
+    QString subject;        // the provider's `sub`
+    QString displayName;    // name / preferred_username / email, for the admin page
+    bool oidcAdmin = false; // a member of an admin group at login
+    // Absolute end of the session (unix secs), 0 for none. Groups are read once,
+    // at login: this is what bounds how long a user removed at the provider
+    // keeps access, so activity never slides it.
+    qint64 expiresAt = 0;
+
     QJsonObject toJson() const
     {
         QJsonObject obj;
@@ -91,6 +106,13 @@ struct SessionInfo
         obj["is_admin"] = isAdmin;
         obj["via_tunnel"] = viaTunnel;
         obj["ephemeral"] = ephemeral;
+        if (!authMethod.isEmpty()) {
+            obj["auth_method"] = authMethod;
+            obj["subject"] = subject;
+            obj["display_name"] = displayName;
+            obj["oidc_admin"] = oidcAdmin;
+        }
+        if (expiresAt > 0) obj["expires_at"] = expiresAt;
         return obj;
     }
 };
@@ -212,6 +234,25 @@ public:
      *  password is changed or removed, so the old secret stops granting access
      *  to the machines that already used it. Returns the number cleared. */
     int demoteAdminSessions();
+    // ── OpenID Connect sessions ────────────────────────────────────────────
+    /** A session for an identity the provider vouched for (OidcLogin). It ends
+     *  @p ttlSecs after creation whatever the activity; @p admin is the
+     *  oidcAdmin flag. Returns the raw cookie token. */
+    QString createOidcSession(const QString& ip, const QString& subject, const QString& displayName,
+                              bool admin, qint64 ttlSecs);
+    /** True when the raw cookie token belongs to a valid OIDC session. */
+    bool isOidcSession(const QString& token) const;
+    /** True when it belongs to a valid OIDC session of an admin group. */
+    bool isOidcAdminSession(const QString& token) const;
+    /** End every OIDC session: who the provider may let in has changed, or the
+     *  provider is gone. Returns the number ended. */
+    int destroyOidcSessions();
+    /** Seconds before an OIDC sign-in from @p ip is allowed again; 0 when it is.
+     *  A bucket of its own ("oidc|<ip>"), on the PIN's tiers. */
+    int oidcLockout(const QString& ip) const;
+    /** Count a failed (@p ok false) or successful sign-in against that bucket. */
+    ValidateResult recordOidcAttempt(const QString& ip, bool ok);
+
     /** Bump a session's lastSeen on activity (sliding expiration). Takes the raw
      *  cookie token. No-op for unknown/empty tokens. */
     void touchSession(const QString& token);
@@ -499,6 +540,9 @@ private:
     // session-scoped (it dies with the browser process), but a public machine is
     // rarely closed: this is what actually ends an abandoned session there.
     static constexpr qint64 EPHEMERAL_SESSION_TTL_SECS = 8LL * 3600; // 8 hours
+
+    /// Past its inactivity budget, or past its absolute end (OIDC).
+    static bool isExpired(const SessionInfo& s, qint64 now);
 
     /// Inactivity budget of a session, which depends on whether it is remembered.
     static constexpr qint64 ttlFor(const SessionInfo& s)

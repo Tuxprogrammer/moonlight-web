@@ -1218,6 +1218,9 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     ctx.hostSession =
         m_AuthManager && m_AuthManager->isHostSession(sessionToken) && (!viaTunnel || tunnelHost);
     ctx.adminSession = m_AuthManager && m_AuthManager->isAdminSession(sessionToken);
+    // An admin group's OIDC session, honoured off the tunnel only: it was minted
+    // on public_url's origin, and nothing in it says who holds it over there.
+    ctx.oidcAdmin = !viaTunnel && m_AuthManager && m_AuthManager->isOidcAdminSession(sessionToken);
     // The admin key has to follow the two sessions that carry admin rights
     // through the tunnel, or they would be read-only: admin WRITES require it,
     // so an admin page that loads and then refuses every change is worse than
@@ -1396,6 +1399,16 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
         resp.headers.remove("Last-Modified");
         resp.headers["Cache-Control"] = "no-store";
         respond(resp);
+        return;
+    }
+
+    // The OpenID Connect login (OidcRoutes). Browser navigations rather than API
+    // calls, so outside /api/: the provider sends the browser back with a
+    // cross-site top-level GET, which the API's CSRF gate rightly refuses. Ahead
+    // of the static files, and never behind the session gate — they are how a
+    // browser without a session gets one.
+    if (req.path.startsWith(QLatin1String("/auth/oidc/"))) {
+        m_Router->dispatchAsync(req, respond);
         return;
     }
 
@@ -1685,6 +1698,7 @@ void HttpServer::sendResponse(QTcpSocket* socket, const HttpResponse& response,
     case 200: statusText = "OK"; break;
     case 201: statusText = "Created"; break;
     case 204: statusText = "No Content"; break;
+    case 302: statusText = "Found"; break;
     case 304: statusText = "Not Modified"; break;
     case 307: statusText = "Temporary Redirect"; break;
     case 400: statusText = "Bad Request"; break;
