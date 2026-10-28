@@ -20,6 +20,8 @@
 #include <QList>
 #include <QString>
 #include <QStringList>
+
+#include "server/ClientAddress.h"
 #include <QJsonArray>
 #include <QJsonObject>
 
@@ -181,6 +183,33 @@ public:
     // (Oidc::effectiveClientSecret). See docs/design/oidc-login.md.
     Oidc::Settings oidcSettings() const;
     void setOidcSettings(const Oidc::Settings& settings);
+    // ── Trusted reverse proxies ───────────────────────────────────────────────
+    //
+    // The reverse proxies whose X-Forwarded-For / Forwarded headers are
+    // believed, so the clients behind them get their own rate-limit buckets,
+    // bans, session IP and geolocation instead of all sharing the proxy's.
+    // Bookkeeping only: no privilege ever reads the forwarded address
+    // (ClientAddress.h, Security §6.4a).
+    //
+    // Stored as JSON array "trusted_proxies" of CIDR strings ("192.0.2.10/32",
+    // "2001:db8::/48"), DEFAULT [] (no proxy believed: the behaviour before the
+    // setting), seeded so it can be found. Written from the admin page
+    // (POST /api/admin/settings), applied to the next request. The environment
+    // variable MW_TRUSTED_PROXIES (commas or spaces), when set and non-empty,
+    // wins over the file and the admin page shows it read-only.
+
+    static constexpr const char* kTrustedProxiesEnv = "MW_TRUSTED_PROXIES";
+    /// The entries in force, as written (the environment's, else the file's).
+    QStringList trustedProxies() const;
+    /// The same, parsed. A junk entry (hand-edited file, environment) is left
+    /// out with a warning in the log: it can only narrow what is believed.
+    ClientAddress::TrustedProxies trustedProxyList() const;
+    /// Whether MW_TRUSTED_PROXIES is what is in force.
+    bool trustedProxiesFromEnvironment() const;
+    /// Validate @p entries whole and store them canonical. False, nothing
+    /// written and every refused entry in @p invalid when any is refused (not
+    /// an address or network, /0, more than ClientAddress::kMaxTrustedProxies).
+    bool setTrustedProxies(const QStringList& entries, QStringList* invalid = nullptr);
 
     // ── Keyboard layout fidelity ──────────────────────────────────────────────
     //

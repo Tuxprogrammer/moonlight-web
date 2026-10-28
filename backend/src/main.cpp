@@ -64,6 +64,7 @@
 #include <memory>
 #include <utility>
 #include "server/AppSettings.h"
+#include "server/ClientAddress.h"
 #include "common/DetachedProcess.h"
 #include "server/ClientUniqueId.h"
 #include "server/OperatorCli.h"
@@ -1349,10 +1350,7 @@ static NetClassify::Kind streamClientKind(const HttpRequest& req)
     const NetClassify::Kind kind = NetClassify::classify(req.clientAddress);
     if (kind != NetClassify::Kind::Loopback && kind != NetClassify::Kind::Private) return kind;
     const bool localProxy = kind == NetClassify::Kind::Loopback && !req.hostTrusted;
-    const bool forwarded = req.headers.contains(QStringLiteral("x-forwarded-for")) ||
-                           req.headers.contains(QStringLiteral("forwarded")) ||
-                           req.headers.contains(QStringLiteral("cf-connecting-ip")) ||
-                           req.headers.contains(QStringLiteral("tailscale-funnel-request"));
+    const bool forwarded = ClientAddress::hasForwardingHeaders(req.headers);
     if (!localProxy && !forwarded) return kind;
     qInfo() << "[Session] Browser behind a reverse proxy (peer" << req.clientAddress << ", Host"
             << req.headers.value(QStringLiteral("host")) << ") — planning ICE for the internet";
@@ -1367,10 +1365,12 @@ static bool streamClientSameNetwork(const HttpRequest& req, NetClassify::Kind ki
                                     const QStringList& hostPublicIpv4)
 {
     if (kind != NetClassify::Kind::Public) return false;
-    if (!NetClassify::sharesHostNetwork(req.clientAddress, hostPublicIpv4,
+    // The client a trusted proxy names, when there is one: the proxy's own
+    // address says nothing about where the browser is. Only adds a candidate.
+    if (!NetClassify::sharesHostNetwork(req.source(), hostPublicIpv4,
                                         QNetworkInterface::allAddresses()))
         return false;
-    qInfo() << "[Session] Browser on the host's own network (" << req.clientAddress
+    qInfo() << "[Session] Browser on the host's own network (" << req.source()
             << ") — the LAN candidate is offered beside the public ones";
     return true;
 }
@@ -2251,6 +2251,15 @@ int main(int argc, char* argv[])
     Logger::info("[Auth] Access the admin page at https://localhost/");
     Logger::info("[Auth] Remote access requires a generated PIN");
     server.setAuthManager(&authManager);
+    // Reverse proxies whose clients are told apart (bookkeeping only).
+    server.setTrustedProxies(appSettings.trustedProxyList());
+    if (!server.trustedProxies().isEmpty())
+        Logger::info(
+            QStringLiteral("[Auth] Trusted proxies%1: %2")
+                .arg(appSettings.trustedProxiesFromEnvironment()
+                         ? QStringLiteral(" (MW_TRUSTED_PROXIES)")
+                         : QString(),
+                     ClientAddress::toStrings(server.trustedProxies()).join(QStringLiteral(", "))));
     const bool adminLocked = parser.isSet(noAdminOption);
     server.setAdminLocked(adminLocked);
     if (adminLocked)

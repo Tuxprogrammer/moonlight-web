@@ -287,6 +287,7 @@ add_executable(mw-server
     src/network/OidcClient.cpp
     src/server/Provisioning.cpp
     src/server/ConnectionGuard.cpp
+    src/server/ClientAddress.cpp
     src/server/HttpServer.cpp
     src/server/ControlChannel.cpp
     src/server/ControlTunnel.cpp
@@ -686,6 +687,9 @@ if(MW_BUILD_TESTS)
     add_executable(mw-security-tests
         tests/security_main.cpp
         tests/test_connection_guard.cpp
+        # Who sent a request behind a reverse proxy (trusted_proxies): the
+        # parser and the decision, and that neither reaches a privilege.
+        tests/test_client_address.cpp
         tests/test_request_guard.cpp
         tests/test_api_csrf.cpp
         tests/test_share_manager.cpp
@@ -710,6 +714,7 @@ if(MW_BUILD_TESTS)
         src/common/InheritedEnvironment.cpp
         src/common/Edition.cpp
         src/server/ConnectionGuard.cpp
+        src/server/ClientAddress.cpp
         src/server/HttpParser.cpp
         src/server/RequestGuard.cpp
         # Session sharing: the link/PIN state machine is pure Qt Core logic on

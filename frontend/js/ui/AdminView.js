@@ -181,6 +181,14 @@ export class AdminView {
         this._verboseLogs = false;
         this._verboseLogsCli = false;
         this._logsBusy = false;
+        // Trusted reverse proxies (Advanced): the entries the server keeps, in
+        // its canonical form; whether MW_TRUSTED_PROXIES holds them (the field
+        // is then read-only); whether this backend knows the setting at all.
+        /** @type {string[]} */
+        this._trustedProxies = [];
+        this._trustedProxiesEnv = false;
+        this._trustedProxiesMax = 64;
+        this._trustedProxiesSupported = false;
 
         // Dirty tracking: snapshot of values at load time
         this._cleanState = {};
@@ -281,6 +289,12 @@ export class AdminView {
             this._debugModeCli = admin.debug_mode_cli === true;
             this._verboseLogs = admin.verbose_logs === true;
             this._verboseLogsCli = admin.verbose_logs_cli === true;
+            this._trustedProxiesSupported = Array.isArray(admin.trusted_proxies);
+            this._trustedProxies = this._trustedProxiesSupported
+                ? admin.trusted_proxies.map(String)
+                : [];
+            this._trustedProxiesEnv = admin.trusted_proxies_env === true;
+            this._trustedProxiesMax = admin.trusted_proxies_max || 64;
         } catch (err) {
             console.warn('[Admin] Failed to load server settings:', err);
         }
@@ -1505,6 +1519,14 @@ export class AdminView {
         const logsBtn = this.container.querySelector('#btn-download-logs');
         if (logsBtn) logsBtn.addEventListener('click', () => void this._downloadLogs());
 
+        // Trusted reverse proxies (Advanced): their own SAVE, lit by a change.
+        const proxiesArea = this.container.querySelector('#admin-trusted-proxies');
+        const proxiesSave = this.container.querySelector('#btn-trusted-proxies-save');
+        if (proxiesArea && proxiesSave) {
+            proxiesArea.addEventListener('input', () => this._syncTrustedProxiesSave());
+            proxiesSave.addEventListener('click', () => void this._saveTrustedProxies());
+        }
+
         // Port field dirty tracking
         const portInput = this.container.querySelector('#admin-https-port');
         if (portInput) {
@@ -2438,6 +2460,7 @@ export class AdminView {
                     ${this._videoPipelineSupported ? this._renderVideoPipeline() : ''}
                     ${this._renderDiagMode('chk-debug-mode', this._debugMode, this._debugModeCli, 'debugMode', '--debug')}
                     ${this._renderDiagMode('chk-verbose-logs', this._verboseLogs, this._verboseLogsCli, 'verboseLogs', '--verbose')}
+                    ${this._trustedProxiesSupported ? this._renderTrustedProxies() : ''}
                     <div class="settings-field">
                         <span class="settings-label">${t('admin.logs')}</span>
                         <p class="setting-desc">${t('admin.logsDesc')}</p>
@@ -2454,6 +2477,117 @@ export class AdminView {
                     </div>
                 </div>
         `;
+    }
+
+    /**
+     * The reverse proxies whose X-Forwarded-For the server believes: one
+     * address or network per line, its own SAVE. Read-only, with the reason,
+     * when MW_TRUSTED_PROXIES holds the list.
+     */
+    _renderTrustedProxies() {
+        const env = this._trustedProxiesEnv;
+        const rows = Math.min(Math.max(this._trustedProxies.length + 1, 3), 8);
+        return `
+                    <div class="settings-field">
+                        <label class="settings-label" for="admin-trusted-proxies">
+                            ${t('admin.trustedProxies')}
+                        </label>
+                        <p class="setting-desc">${t('admin.trustedProxiesDesc')}</p>
+                        <div class="admin-trusted-proxies-row">
+                            <textarea id="admin-trusted-proxies" class="settings-input admin-trusted-proxies"
+                                      rows="${rows}" autocomplete="off" spellcheck="false"
+                                      placeholder="192.0.2.10" ${env ? 'readonly' : ''}
+                                      >${this.esc(this._trustedProxies.join('\n'))}</textarea>
+                            ${
+                                env
+                                    ? ''
+                                    : `<button class="btn btn-save u-shrink-0" id="btn-trusted-proxies-save" disabled>
+                                ${t('common.save')}
+                            </button>`
+                            }
+                        </div>
+                        <p class="settings-hint">
+                            ${t(env ? 'admin.trustedProxiesEnv' : 'admin.trustedProxiesHint')}
+                        </p>
+                    </div>
+        `;
+    }
+
+    /**
+     * The entries typed in the field: split on commas, spaces and new lines,
+     * empties dropped. The server checks each one.
+     * @param {string} text
+     * @returns {string[]}
+     */
+    static parseTrustedProxies(text) {
+        return String(text)
+            .split(/[\s,]+/)
+            .filter((e) => e.length > 0);
+    }
+
+    /**
+     * Save the trusted proxies typed in the field. The server validates the
+     * whole list: on a refusal nothing is stored and the field keeps what was
+     * typed, naming the entries to fix.
+     */
+    async _saveTrustedProxies() {
+        const area = /** @type {HTMLTextAreaElement|null} */ (
+            this.container.querySelector('#admin-trusted-proxies')
+        );
+        const btn = /** @type {HTMLButtonElement|null} */ (
+            this.container.querySelector('#btn-trusted-proxies-save')
+        );
+        if (!area || !btn || btn.disabled) return;
+        const wanted = AdminView.parseTrustedProxies(area.value);
+        btn.disabled = true;
+        try {
+            const resp = await BackendClient.saveAdminSettings({ trusted_proxies: wanted });
+            // The server's answer, canonical ("192.0.2.10/32"), not what was typed.
+            this._trustedProxies = Array.isArray(resp.trusted_proxies)
+                ? resp.trusted_proxies.map(String)
+                : wanted;
+            area.value = this._trustedProxies.join('\n');
+            Toast.success(
+                this._trustedProxies.length > 0
+                    ? t('admin.trustedProxiesSaved', { list: this._trustedProxies.join(', ') })
+                    : t('admin.trustedProxiesCleared'),
+            );
+        } catch (err) {
+            const e = /** @type {{statusCode?: number, responseBody?: any, message: string}} */ (
+                err
+            );
+            const body = e.responseBody || {};
+            if (e.statusCode === 400 && body.error === 'invalid_trusted_proxies') {
+                const entries = Array.isArray(body.invalid) ? body.invalid.join(', ') : '';
+                Toast.error(t('admin.trustedProxiesInvalid', { entries }));
+            } else if (e.statusCode === 409 && body.error === 'set_by_environment') {
+                // Someone set MW_TRUSTED_PROXIES since this page loaded.
+                this._trustedProxiesEnv = true;
+                area.readOnly = true;
+                btn.remove();
+                Toast.error(t('admin.trustedProxiesEnv'));
+                return;
+            } else {
+                console.error('[Admin] Failed to save trusted proxies:', err);
+                Toast.error(t('admin.saveFailed', { message: e.message }));
+            }
+        }
+        this._syncTrustedProxiesSave();
+    }
+
+    /** SAVE is lit only when the entries differ from the stored list. */
+    _syncTrustedProxiesSave() {
+        const area = /** @type {HTMLTextAreaElement|null} */ (
+            this.container.querySelector('#admin-trusted-proxies')
+        );
+        const btn = /** @type {HTMLButtonElement|null} */ (
+            this.container.querySelector('#btn-trusted-proxies-save')
+        );
+        if (!area || !btn) return;
+        const typed = AdminView.parseTrustedProxies(area.value);
+        btn.disabled =
+            typed.length === this._trustedProxies.length &&
+            typed.every((e, i) => e === this._trustedProxies[i]);
     }
 
     /**

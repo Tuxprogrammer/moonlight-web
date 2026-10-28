@@ -16,6 +16,7 @@
  */
 
 #include "AuthManager.h"
+#include "ClientAddress.h"
 #include "AppSettings.h"
 #include "common/Logger.h"
 #include "common/PairingCrypto.h"
@@ -390,44 +391,15 @@ QString AuthManager::rateLimitKey(const QString& ip)
 
 QString AuthManager::attemptAddress(const QString& peer, const QMap<QString, QString>& headers)
 {
-    const QString clean = cleanClientAddress(peer);
-    if (!QHostAddress(clean).isLoopback()) return clean;
+    // Step 3 of the one precedence (ClientAddress::resolve), with no trusted
+    // proxy configured: what this function has always answered.
+    return ClientAddress::resolve(peer, headers, {}).attempt;
+}
 
-    // One candidate as a proxy writes it: maybe quoted, maybe with a port, an
-    // IPv6 address in brackets when it has one ("[2001:db8::1]:4711").
-    const auto parse = [](QString v) -> QString {
-        v = v.trimmed();
-        if (v.startsWith(QLatin1Char('"')) && v.endsWith(QLatin1Char('"')) && v.size() >= 2)
-            v = v.mid(1, v.size() - 2);
-        if (v.startsWith(QLatin1Char('['))) {
-            const int end = v.indexOf(QLatin1Char(']'));
-            v = end > 0 ? v.mid(1, end - 1) : QString();
-        } else if (v.count(QLatin1Char(':')) == 1) {
-            v = v.left(v.indexOf(QLatin1Char(':'))); // IPv4 with a port
-        }
-        const QHostAddress addr(v);
-        return addr.isNull() ? QString() : cleanClientAddress(addr.toString());
-    };
-
-    const QString cf = parse(headers.value(QStringLiteral("cf-connecting-ip")));
-    if (!cf.isEmpty()) return cf;
-    const QStringList xff = headers.value(QStringLiteral("x-forwarded-for"))
-                                .split(QLatin1Char(','), Qt::SkipEmptyParts);
-    if (!xff.isEmpty()) {
-        const QString last = parse(xff.last());
-        if (!last.isEmpty()) return last;
-    }
-    const QStringList fwd =
-        headers.value(QStringLiteral("forwarded")).split(QLatin1Char(','), Qt::SkipEmptyParts);
-    if (!fwd.isEmpty()) {
-        for (const QString& pair : fwd.last().split(QLatin1Char(';'))) {
-            const QString p = pair.trimmed();
-            if (!p.startsWith(QStringLiteral("for="), Qt::CaseInsensitive)) continue;
-            const QString addr = parse(p.mid(4));
-            if (!addr.isEmpty()) return addr;
-        }
-    }
-    return clean;
+QString AuthManager::attemptAddress(const HttpRequest& req)
+{
+    return req.attemptAddress.isEmpty() ? attemptAddress(req.clientAddress, req.headers)
+                                        : req.attemptAddress;
 }
 
 void AuthManager::cleanupExpired()

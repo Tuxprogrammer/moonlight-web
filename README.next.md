@@ -472,6 +472,12 @@ Under the hood the switch writes `"session_metrics_enabled"` and `"update_relay_
 
 The admin sessions list can show a city and country, looked up by sending the **visitor's** IP to `ipwho.is`. It is **off** unless you set `"session_location_enabled": true`; private addresses are never sent.
 
+#### Behind a reverse proxy
+
+Behind nginx, Caddy or Traefik, every request comes from the proxy's address, so all your users share one PIN counter, one ban and one line in the sessions list. List the proxy in **Admin → Advanced → Trusted reverse proxies** (or `"trusted_proxies": ["192.0.2.10"]`, or `MW_TRUSTED_PROXIES=192.0.2.10`) and each client is counted as itself, read from `X-Forwarded-For`.
+
+It grants nothing: admin access and every LAN‑only check still look at the proxy's own address. Headers from any machine not on the list are ignored. Give the proxy's exact address, and make sure it appends to `X-Forwarded-For` (nginx: `$proxy_add_x_forwarded_for`). Details in [Security §6.4a](docs/wiki/06-Security.md#64a-behind-a-reverse-proxy-trusted_proxies).
+
 ### SSL — your own domain & certificate
 
 On the LAN the server uses a **self‑signed** certificate. For a real name and certificate, set them in `settings.json`:

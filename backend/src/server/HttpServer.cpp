@@ -18,6 +18,7 @@
 #include "HttpServer.h"
 #include "HttpParser.h"
 #include "PortFallback.h"
+#include "ClientAddress.h"
 #include "RequestGuard.h"
 #include "RestRouter.h"
 #include "StaticFileHandler.h"
@@ -29,6 +30,7 @@
 
 #include <QCoreApplication>
 #include <QCryptographicHash>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QDir>
 #include <QDirIterator>
@@ -701,7 +703,7 @@ quint16 HttpServer::authorizeTunnelWebSocket(const HttpRequest& req, QString* ou
     const bool playerSlot = slot >= m_FirstPlayerSlot && slot < m_FirstExtraSlot;
     if (playerSlot) {
         if (!m_PlayerSlotAuth || !m_PlayerSlotAuth(req, slot)) {
-            m_ConnGuard.reportAuthFailure(req.clientAddress);
+            m_ConnGuard.reportAuthFailure(req.source());
             return refuse(QStringLiteral("not authorised for this player slot"));
         }
         return targetPort;
@@ -710,11 +712,11 @@ quint16 HttpServer::authorizeTunnelWebSocket(const HttpRequest& req, QString* ou
     // No local exemption on this path, ever — see Arrival. A session is the only
     // thing that opens it, and only on the key it was paired with.
     if (tunnelKeyRefused(req)) {
-        m_ConnGuard.reportAuthFailure(req.clientAddress);
+        m_ConnGuard.reportAuthFailure(req.source());
         return refuse(QStringLiteral("this session belongs to another browser"));
     }
     if (m_AuthManager && !m_AuthManager->validateSession(sessionTokenFromRequest(req))) {
-        m_ConnGuard.reportAuthFailure(req.clientAddress);
+        m_ConnGuard.reportAuthFailure(req.source());
         return refuse(QStringLiteral("authentication required"));
     }
     return targetPort;
@@ -1027,19 +1029,22 @@ void HttpServer::processRequest(QTcpSocket* socket, const QByteArray& requestDat
 {
     HttpRequest req = HttpParser::parse(requestData);
     req.clientAddress = socket->peerAddress().toString();
+    // Who it is from behind a trusted proxy, for the bookkeeping below and in
+    // serveRequest(); clientAddress stays the peer.
+    ClientAddress::stamp(req, m_ConnGuard.trustedProxies());
 
     // A request target carrying control characters is refused before anything
     // reads it: the redirect below puts the path in a Location header, and a
     // smuggled CR/LF would let the caller append headers of their own.
     if (req.malformed) {
         Logger::warning(QString("[HttpServer] Malformed request target refused from %1")
-                            .arg(req.clientAddress));
-        m_ConnGuard.reportAuthFailure(req.clientAddress);
+                            .arg(ClientAddress::describe(req)));
+        m_ConnGuard.reportAuthFailure(req.source());
         sendResponse(socket, HttpResponse::error(400, "Bad Request"));
         return;
     }
 
-    const bool peerLocal = isLocalRequest(req.clientAddress);
+    const bool peerLocal = isLocalRequest(RequestGuard::privilegeAddress(req));
 
     // HTTP→HTTPS redirect for plain HTTP connections.
     //
@@ -1177,6 +1182,10 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     // been: a session established with the PIN.
     const bool viaTunnel = (arrival == Arrival::Tunnel);
     req.viaTunnel = viaTunnel;
+    // The tunnel is stamped here, never from its headers (ClientAddress::resolve
+    // step 1); a socket request already was, in processRequest().
+    if (viaTunnel || req.sourceAddress.isEmpty())
+        ClientAddress::stamp(req, m_ConnGuard.trustedProxies(), viaTunnel);
 
     // A target carrying control characters is refused before anything reads it.
     // The socket path already catches this at parse time; the tunnel builds its
@@ -1185,9 +1194,24 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     if (req.malformed || req.path.contains(QLatin1Char('\r')) ||
         req.path.contains(QLatin1Char('\n'))) {
         Logger::warning(QString("[HttpServer] Malformed request target refused from %1")
-                            .arg(req.clientAddress));
-        m_ConnGuard.reportAuthFailure(req.clientAddress);
+                            .arg(ClientAddress::describe(req)));
+        m_ConnGuard.reportAuthFailure(req.source());
         respond(HttpResponse::error(400, "Bad Request"));
+        return;
+    }
+
+    // A banned client behind a trusted proxy: the socket is the proxy's, so
+    // accept() could not refuse it. Refused here instead, per request, with
+    // the time left; the proxy itself is never banned for it.
+    if (!m_ConnGuard.allowRequest(req.source(), req.clientAddress)) {
+        const int left =
+            m_ConnGuard.banSecondsRemaining(req.source(), QDateTime::currentMSecsSinceEpoch());
+        QJsonObject obj;
+        obj["error"] = "temporarily_banned";
+        obj["retry_after"] = left;
+        HttpResponse resp = HttpResponse::json(obj, 429);
+        resp.headers["Retry-After"] = QString::number(left);
+        respond(resp);
         return;
     }
 
@@ -1197,15 +1221,17 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
     if (viaTunnel && tunnelKeyRefused(req)) {
         Logger::warning(QString("[HttpServer] Session refused on a tunnel whose browser key is not "
                                 "the session's: %1 %2 from %3")
-                            .arg(req.method, req.path, req.clientAddress));
-        m_ConnGuard.reportAuthFailure(req.clientAddress);
+                            .arg(req.method, req.path, ClientAddress::describe(req)));
+        m_ConnGuard.reportAuthFailure(req.source());
         QJsonObject obj;
         obj["error"] = "session_key_mismatch";
         respond(HttpResponse::json(obj, 401));
         return;
     }
 
-    const bool peerLocal = !viaTunnel && isLocalRequest(req.clientAddress);
+    // Where the caller sits is the socket peer's to say, never a forwarded
+    // client's (RequestGuard::privilegeAddress).
+    const bool peerLocal = !viaTunnel && isLocalRequest(RequestGuard::privilegeAddress(req));
     const QString sessionToken = sessionTokenFromRequest(req);
 
     // The single exception, computed once so the two lines below cannot drift
@@ -1241,7 +1267,7 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
         if (decision.outcome == RequestGuard::Outcome::BlockCrossSite) {
             Logger::warning(QString("[HttpServer] Cross-site request refused: %1 %2 (origin='%3')")
                                 .arg(req.method, req.path, req.headers.value("origin")));
-            m_ConnGuard.reportAuthFailure(req.clientAddress);
+            m_ConnGuard.reportAuthFailure(req.source());
         }
         QJsonObject obj;
         obj["error"] = RequestGuard::blockError(decision.outcome);
@@ -1287,7 +1313,7 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
             resp = HttpResponse::json(obj);
             break;
         case RequestGuard::AdminTokenReply::Deny:
-            m_ConnGuard.reportAuthFailure(req.clientAddress);
+            m_ConnGuard.reportAuthFailure(req.source());
             obj["error"] = "forbidden";
             resp = HttpResponse::json(obj, 403);
             break;
@@ -1480,7 +1506,7 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
         !req.path.startsWith("/api/share/player/") && !isAuthenticated(req)) {
         // Unauthenticated remote API hit = credential scanning; feed the guard
         // so repeated failures ban the source IP.
-        m_ConnGuard.reportAuthFailure(req.clientAddress);
+        m_ConnGuard.reportAuthFailure(req.source());
         QJsonObject obj;
         obj["error"] = "authentication_required";
         respond(HttpResponse::json(obj, 401));
@@ -1502,16 +1528,31 @@ void HttpServer::serveRequest(HttpRequest req, Arrival arrival, ResponseCallback
 
 void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArray& requestData)
 {
-    const HttpRequest up = HttpParser::parse(requestData);
+    HttpRequest up = HttpParser::parse(requestData);
     const QString peerAddr = clientSocket->peerAddress().toString();
+    up.clientAddress = peerAddr;
+    // Failures count against the client behind a trusted proxy, as on REST.
+    // Every privilege below still reads peerAddr.
+    ClientAddress::stamp(up, m_ConnGuard.trustedProxies());
 
     // Same refusal as the REST path: a control character in the target means the
     // handshake was crafted, and it is forwarded verbatim to the WS server below.
     if (up.malformed) {
         Logger::warning(QString("[HttpServer] Malformed WebSocket upgrade target refused from %1")
-                            .arg(peerAddr));
-        m_ConnGuard.reportAuthFailure(peerAddr);
+                            .arg(ClientAddress::describe(up)));
+        m_ConnGuard.reportAuthFailure(up.source());
         sendResponse(clientSocket, HttpResponse::error(400, "Bad Request"));
+        return;
+    }
+
+    // A banned client behind a trusted proxy (see serveRequest).
+    if (!m_ConnGuard.allowRequest(up.source(), peerAddr)) {
+        QJsonObject obj;
+        obj["error"] = "temporarily_banned";
+        HttpResponse resp = HttpResponse::json(obj, 429);
+        resp.headers["Retry-After"] = QString::number(
+            m_ConnGuard.banSecondsRemaining(up.source(), QDateTime::currentMSecsSinceEpoch()));
+        sendResponse(clientSocket, resp);
         return;
     }
 
@@ -1560,7 +1601,7 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
         Logger::warning(QString("[HttpServer] WebSocket upgrade refused: origin '%1' does not "
                                 "match host '%2'")
                             .arg(up.headers.value("origin"), up.headers.value("host")));
-        m_ConnGuard.reportAuthFailure(peerAddr);
+        m_ConnGuard.reportAuthFailure(up.source());
         QJsonObject obj;
         obj["error"] = "cross_site_request_blocked";
         sendResponse(clientSocket, HttpResponse::json(obj, 403));
@@ -1615,7 +1656,7 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
                                 RequestGuard::isLocalHostName(up.headers.value("host"));
     if (playerSlot) {
         if (!m_PlayerSlotAuth || !m_PlayerSlotAuth(up, wsSlot)) {
-            m_ConnGuard.reportAuthFailure(peerAddr);
+            m_ConnGuard.reportAuthFailure(up.source());
             QJsonObject obj;
             obj["error"] = "authentication_required";
             sendResponse(clientSocket, HttpResponse::json(obj, 401));
@@ -1623,7 +1664,7 @@ void HttpServer::handleWebSocketUpgrade(QTcpSocket* clientSocket, const QByteArr
         }
     } else if (m_AuthManager && !localPrivilege) {
         if (!m_AuthManager->validateSession(sessionTokenFromRequest(up))) {
-            m_ConnGuard.reportAuthFailure(peerAddr);
+            m_ConnGuard.reportAuthFailure(up.source());
             QJsonObject obj;
             obj["error"] = "authentication_required";
             HttpResponse resp = HttpResponse::json(obj, 401);

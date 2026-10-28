@@ -47,6 +47,11 @@ bool ConnectionGuard::isExempt(const QString& ip)
     return false;
 }
 
+bool ConnectionGuard::isExemptHere(const QString& ip) const
+{
+    return isExempt(ip) || ClientAddress::isTrusted(ip, m_trusted);
+}
+
 void ConnectionGuard::trimWindow(std::deque<qint64>& q, qint64 nowMs, qint64 windowMs)
 {
     const qint64 cutoff = nowMs - windowMs;
@@ -61,9 +66,9 @@ bool ConnectionGuard::allowConnection(const QString& ip)
 
 bool ConnectionGuard::allowConnection(const QString& ip, qint64 nowMs)
 {
-    if (isExempt(ip)) return true;
+    if (isExemptHere(ip)) return true;
 
-    IpState& s = m_state[ip];
+    IpState& s = m_state[key(ip)];
     s.lastSeenMs = nowMs;
 
     if (nowMs < s.bannedUntilMs) return false;
@@ -86,9 +91,9 @@ void ConnectionGuard::reportAuthFailure(const QString& ip)
 
 void ConnectionGuard::reportAuthFailure(const QString& ip, qint64 nowMs)
 {
-    if (isExempt(ip)) return;
+    if (isExemptHere(ip)) return;
 
-    IpState& s = m_state[ip];
+    IpState& s = m_state[key(ip)];
     s.lastSeenMs = nowMs;
 
     s.authFailTimes.push_back(nowMs);
@@ -105,16 +110,27 @@ bool ConnectionGuard::isBanned(const QString& ip) const
     return isBanned(ip, QDateTime::currentMSecsSinceEpoch());
 }
 
+bool ConnectionGuard::allowRequest(const QString& client, const QString& peer) const
+{
+    return allowRequest(client, peer, QDateTime::currentMSecsSinceEpoch());
+}
+
+bool ConnectionGuard::allowRequest(const QString& client, const QString& peer, qint64 nowMs) const
+{
+    if (client.isEmpty() || key(client) == key(peer)) return true;
+    return !isBanned(client, nowMs);
+}
+
 bool ConnectionGuard::isBanned(const QString& ip, qint64 nowMs) const
 {
-    auto it = m_state.constFind(ip);
+    auto it = m_state.constFind(key(ip));
     if (it == m_state.constEnd()) return false;
     return nowMs < it->bannedUntilMs;
 }
 
 int ConnectionGuard::banSecondsRemaining(const QString& ip, qint64 nowMs) const
 {
-    auto it = m_state.constFind(ip);
+    auto it = m_state.constFind(key(ip));
     if (it == m_state.constEnd() || nowMs >= it->bannedUntilMs) return 0;
     return static_cast<int>((it->bannedUntilMs - nowMs + 999) / 1000);
 }

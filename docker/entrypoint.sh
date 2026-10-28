@@ -199,6 +199,29 @@ apply_string_setting() {
 
 apply_setting http_port "${MW_HTTP_PORT:-}"
 apply_setting https_port "${MW_HTTPS_PORT:-}"
+
+# A list from one variable, split on commas and white space, written as a JSON
+# array of strings. The server validates every entry when it reads them.
+apply_list() {
+    _key=$1 _value=$2
+    [ -n "$_value" ] || return 0
+    [ -f "$SETTINGS" ] || echo '{}' > "$SETTINGS"
+    _tmp="$SETTINGS.tmp"
+    if jq --arg v "$_value" ".\"$_key\" = [\$v | splits(\"[,[:space:]]+\") | select(length > 0)]" \
+        "$SETTINGS" > "$_tmp" 2>/dev/null; then
+        mv "$_tmp" "$SETTINGS"
+    else
+        rm -f "$_tmp"
+        echo "entrypoint: could not set $_key in $SETTINGS (is it valid JSON?)" >&2
+    fi
+}
+
+# The reverse proxies in front of the container whose X-Forwarded-For is
+# believed, for rate limits, bans and the sessions list (Security §6.4a). The
+# server also reads MW_TRUSTED_PROXIES itself, and it wins over the file while
+# set; writing it here keeps settings.json saying what is in force.
+apply_list trusted_proxies "${MW_TRUSTED_PROXIES:-}"
+
 # UPnP port mapping is how a stream reaches a browser outside the LAN without
 # hand-written router rules, and it is driven by SSDP multicast — which reaches
 # a router from the host network and from nowhere else. Left on by default (the

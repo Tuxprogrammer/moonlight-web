@@ -128,7 +128,7 @@ HttpResponse writeClientLog(const HttpRequest& req, const QString& who)
     // of user, and where from.
     QString id = body.value(QStringLiteral("id")).toString().left(16);
     id.remove(QRegularExpression(QStringLiteral("[^A-Za-z0-9]")));
-    const QString tag = QStringLiteral("[%1 %2@%3]").arg(id, who, req.clientAddress);
+    const QString tag = QStringLiteral("[%1 %2@%3]").arg(id, who, req.source());
 
     if (body.value(QStringLiteral("seq")).toInt() == 0) {
         log->log(Logger::Info,
@@ -183,7 +183,8 @@ void registerLogRoutes(HttpServer& server, LogArchive& archive,
         if (!archive.start(logDir(), Logger::instance()->logFilePath(), aboutText(), archiveName(),
                            LogScrubber(names ? names() : LogScrubber::Names())))
             return HttpResponse::error(409, "An archive is already being built");
-        Logger::info(QStringLiteral("[Logs] Archive requested from %1").arg(req.clientAddress));
+        Logger::info(
+            QStringLiteral("[Logs] Archive requested from %1").arg(ClientAddress::describe(req)));
         return HttpResponse::json(statusJson(archive.status()));
     });
 

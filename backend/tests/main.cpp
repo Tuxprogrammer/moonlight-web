@@ -25,6 +25,7 @@ void run_jwt_verifier_tests();
 void run_oidc_rules_tests();
 void run_oidc_flow_tests();
 void run_connection_guard_tests();
+void run_client_address_tests();
 void run_static_files_tests();
 void run_home_screen_shell_tests();
 void run_http_parser_tests();
@@ -113,6 +114,7 @@ int main(int argc, char** argv)
     run_oidc_rules_tests();
     run_oidc_flow_tests();
     run_connection_guard_tests();
+    run_client_address_tests();
     run_static_files_tests();
     run_home_screen_shell_tests();
     run_http_parser_tests();

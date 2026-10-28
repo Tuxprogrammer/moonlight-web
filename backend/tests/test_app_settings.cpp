@@ -3,6 +3,7 @@
  */
 #include "test_framework.h"
 #include "server/AppSettings.h"
+#include "server/ClientAddress.h"
 
 #include "mw/native/VideoPipeline.h"
 
@@ -608,6 +609,72 @@ void run_app_settings_tests()
         s.writeAll(obj);
         CHECK(!s.shareInBoothMode());
         s.seedDocumentedDefaults();
+    }
+
+    // trusted_proxies: seeded empty (today's behaviour), validated whole on
+    // write, stored canonical, and MW_TRUSTED_PROXIES wins over the file.
+    {
+        qunsetenv("MW_TRUSTED_PROXIES");
+        CHECK(s.readAll().value("trusted_proxies").isArray());
+        CHECK(s.readAll().value("trusted_proxies").toArray().isEmpty());
+        CHECK(s.trustedProxies().isEmpty());
+        CHECK(s.trustedProxyList().isEmpty());
+        CHECK(!s.trustedProxiesFromEnvironment());
+
+        QStringList invalid;
+        CHECK(s.setTrustedProxies({" 192.0.2.10 ", "10.0.0.0/8", "2001:db8::1/32", "10.0.0.0/8"},
+                                  &invalid));
+        CHECK(invalid.isEmpty());
+        // Canonical, deduplicated, in order.
+        CHECK_EQ(s.trustedProxies(), QStringList({"192.0.2.10/32", "10.0.0.0/8", "2001:db8::/32"}));
+        CHECK_EQ(s.trustedProxyList().size(), 3);
+        // The seed keeps the owner's list.
+        s.seedDocumentedDefaults();
+        CHECK_EQ(s.trustedProxies().size(), 3);
+
+        // One bad entry refuses the whole write and names every culprit.
+        CHECK(!s.setTrustedProxies({"192.0.2.11", "proxy.example", "0.0.0.0/0", "10.0.0.0/33"},
+                                   &invalid));
+        CHECK_EQ(invalid, QStringList({"proxy.example", "0.0.0.0/0", "10.0.0.0/33"}));
+        CHECK_EQ(s.trustedProxies().size(), 3); // unchanged
+        // Too many entries is refused too.
+        QStringList many;
+        for (int i = 0; i <= ClientAddress::kMaxTrustedProxies; ++i)
+            many << QStringLiteral("198.51.100.%1").arg(i);
+        invalid.clear();
+        CHECK(!s.setTrustedProxies(many, &invalid));
+        CHECK_EQ(invalid.size(), 1);
+        CHECK_EQ(s.trustedProxies().size(), 3);
+
+        // Clearing is a write like any other.
+        CHECK(s.setTrustedProxies({}, &invalid));
+        CHECK(s.trustedProxies().isEmpty());
+        CHECK(s.readAll().value("trusted_proxies").isArray());
+
+        // A hand-edited file: junk entries and non-strings are dropped when
+        // read, never trusted; a non-array reads as empty.
+        QJsonObject obj = s.readAll();
+        obj["trusted_proxies"] = QJsonArray{"192.0.2.10", 42, "junk", "203.0.113.0/24"};
+        s.writeAll(obj);
+        CHECK_EQ(s.trustedProxies(), QStringList({"192.0.2.10", "junk", "203.0.113.0/24"}));
+        CHECK_EQ(ClientAddress::toStrings(s.trustedProxyList()),
+                 QStringList({"192.0.2.10/32", "203.0.113.0/24"}));
+        obj["trusted_proxies"] = "192.0.2.10";
+        s.writeAll(obj);
+        CHECK(s.trustedProxies().isEmpty());
+
+        // The environment wins over the file while it is set (and non-empty).
+        CHECK(s.setTrustedProxies({"192.0.2.10"}, &invalid));
+        qputenv("MW_TRUSTED_PROXIES", "203.0.113.7, 2001:db8:aaaa::/48 junk");
+        CHECK(s.trustedProxiesFromEnvironment());
+        CHECK_EQ(s.trustedProxies(), QStringList({"203.0.113.7", "2001:db8:aaaa::/48", "junk"}));
+        CHECK_EQ(ClientAddress::toStrings(s.trustedProxyList()),
+                 QStringList({"203.0.113.7/32", "2001:db8:aaaa::/48"}));
+        qputenv("MW_TRUSTED_PROXIES", "  ");
+        CHECK(!s.trustedProxiesFromEnvironment());
+        CHECK_EQ(s.trustedProxies(), QStringList({"192.0.2.10/32"}));
+        qunsetenv("MW_TRUSTED_PROXIES");
+        CHECK(s.setTrustedProxies({}, &invalid));
     }
 
     // The native host is offered unless someone says otherwise — and an absent

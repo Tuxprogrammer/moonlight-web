@@ -116,6 +116,7 @@ The consent is the master switch: `internet_access_enabled` gates the per-sessio
 | `oidc_session_ttl_hours` | int | `24` | Lifetime of an OIDC session, 1–720, counted from the login and never extended by activity: how long a user removed at the provider keeps access at most. |
 | `public_url` | array of strings | `[]` | The origins OIDC sign-in is offered on, one per name this instance is reached under — `["https://mw.example.com", "https://192.0.2.10:8443"]`. Each is `https://host[:port]` with no path; register each one's `<origin>/auth/oidc/callback` as a redirect URI at the provider (the admin page lists them). A request on any other origin is not offered the button and `/auth/oidc/start` refuses it (403); a login started on one origin must finish on it. A single string is read as a list of one. |
 | `local_key` | string | generated | The host key: single-use host-machine key carried by the host's own entry links; rotates on redemption. |
+| `trusted_proxies` | array of strings | `[]` | The reverse proxies whose `X-Forwarded-For` (else `Forwarded: for=`) is believed: addresses (`"192.0.2.10"`, one host) or CIDR networks (`"192.0.2.0/24"`, `"2001:db8::/48"`), at most 64, `/0` refused. The client they forward then gets its own PIN and password rate limits, its own ConnectionGuard entry and ban, and its own address and location in the sessions list and the logs. **It grants nothing**: local and admin privilege, the admin unlock and every LAN-only check keep judging the proxy's own address. Empty, nothing is believed, as before the setting existed. Seeded at startup; set from **Admin → Advanced**, or `POST /api/admin/settings`, and applied to the next request. `MW_TRUSTED_PROXIES` in the environment wins while it is set. List the proxy's exact address, and see what the proxy must do: [Security §6.4a](06-Security.md#64a-behind-a-reverse-proxy-trusted_proxies). |
 
 ### Lifecycle
 
@@ -161,6 +162,7 @@ Loaded at startup by `loadEnvFile()` (`.env` next to the executable, else the pr
 | `MW_CERT_PEM` / `MW_CERT_KEY` | optional | Inline PEM cert/key (the default `cert_pem`/`cert_key` settings point at these env-var names). |
 | `MW_SERVICE` | service installs | Set by service supervisors: suppresses browser/tray/shortcut behavior and port-mapping take-overs. |
 | `MW_MEDIA_QUEUED_VIDEO` | debug | `1` rolls `MediaTrackRelay` back to the old queued-video send path (default: send from the capture thread). |
+| `MW_TRUSTED_PROXIES` | behind a reverse proxy | The `trusted_proxies` list (above), separated by commas or spaces. While set and non-empty it wins over `settings.json`, and the admin page shows it read-only (`POST /api/admin/settings` answers **409** `set_by_environment`). An entry that does not parse is left out with a warning in the log. The Docker entrypoint also writes it into `settings.json` on every start. |
 | `MW_SHARED_FEED` | A/B, safety net | `0` gives each guest of the native host its own encoder again, whatever `shared_feed_enabled` says (see above). |
 
 ### Build-time embedded fallbacks

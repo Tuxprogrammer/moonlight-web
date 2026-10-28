@@ -144,7 +144,7 @@ Unit tests for the pure-logic modules: `Mp4Muxer` (NAL/avcC/hvcC), `Av1Utils`, `
 
 ### Backend — Qt Test (`backend/tests/`)
 
-A lightweight in-repo framework (`test_framework.h`) + suites: `AppSettings`, `AuthManager`, `ConnectionGuard`, `HttpParser`, `InputCrypto`, `InputEncoder`, `RestRouter`, `StaticFiles`, `StreamConfig`, `UPNPClient` (with a dedicated `UPNP_TEST_PLAN.md` and `run_upnp_tests.bat`). `security_main.cpp` groups the security-sensitive suites. Coverage via OpenCppCoverage (`run_coverage.bat`, `check_coverage.ps1`) with the same 70%-on-pure-logic philosophy. `ConnectionGuard` takes injectable timestamps for deterministic tests.
+A lightweight in-repo framework (`test_framework.h`) + suites: `AppSettings`, `AuthManager`, `ConnectionGuard`, `ClientAddress`, `HttpParser`, `InputCrypto`, `InputEncoder`, `RestRouter`, `StaticFiles`, `StreamConfig`, `UPNPClient` (with a dedicated `UPNP_TEST_PLAN.md` and `run_upnp_tests.bat`). `security_main.cpp` groups the security-sensitive suites. Coverage via OpenCppCoverage (`run_coverage.bat`, `check_coverage.ps1`) with the same 70%-on-pure-logic philosophy. `ConnectionGuard` takes injectable timestamps for deterministic tests.
 
 ### What is intentionally *not* unit-tested
 

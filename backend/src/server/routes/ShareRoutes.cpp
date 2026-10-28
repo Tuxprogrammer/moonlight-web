@@ -21,8 +21,8 @@
 #include "network/LinkAddresses.h"
 #include "network/UPNPClient.h"
 #include "server/AuthManager.h"
+#include "server/ClientAddress.h"
 #include "server/HttpServer.h"
-#include "server/NetClassify.h"
 #include "server/RestRouter.h"
 #include "server/routes/LogRoutes.h"
 
@@ -204,13 +204,8 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
             if (!pinned && !req.viaTunnel) {
                 // A reverse proxy in front of this PC names the address the
                 // browser used; anyone else's word for it is the Host itself.
-                const NetClassify::Kind peer = NetClassify::classify(req.clientAddress);
-                QString authority;
-                if (peer == NetClassify::Kind::Loopback || peer == NetClassify::Kind::Private)
-                    authority = req.headers.value(QStringLiteral("x-forwarded-host"))
-                                    .section(QLatin1Char(','), 0, 0)
-                                    .trimmed();
-                if (authority.isEmpty()) authority = req.headers.value(QStringLiteral("host"));
+                const QString authority = ClientAddress::forwardedHost(
+                    req.clientAddress, req.headers, server.trustedProxies());
                 if (const auto board = LinkAddresses::boardOrigin(authority, list)) {
                     direct(board->origin, board->reach);
                     return;
@@ -438,10 +433,9 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
         const QString token = body.value(QStringLiteral("token")).toString();
         const QString pin = body.value(QStringLiteral("pin")).toString();
 
-        const ShareManager::PinOutcome outcome = share.redeemPin(
-            token, pin,
-            AuthManager::rateLimitKey(AuthManager::attemptAddress(req.clientAddress, req.headers)),
-            req.headers.value(QStringLiteral("user-agent")));
+        const ShareManager::PinOutcome outcome =
+            share.redeemPin(token, pin, AuthManager::rateLimitKey(AuthManager::attemptAddress(req)),
+                            req.headers.value(QStringLiteral("user-agent")));
 
         QJsonObject obj;
         switch (outcome.result) {
@@ -470,14 +464,14 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
         case ShareManager::PinResult::RateLimited:
             obj[QStringLiteral("error")] = QStringLiteral("rate_limited");
             obj[QStringLiteral("lockout_seconds")] = outcome.lockoutSeconds;
-            server.reportAuthFailure(req.clientAddress);
+            server.reportAuthFailure(req.source());
             return HttpResponse::json(obj, 429);
         case ShareManager::PinResult::Invalid:
             // One answer for a wrong PIN, an unknown token and an expired one.
             obj[QStringLiteral("error")] = QStringLiteral("invalid_pin");
             obj[QStringLiteral("remaining")] = outcome.remainingAttempts;
             obj[QStringLiteral("lockout_seconds")] = outcome.lockoutSeconds;
-            server.reportAuthFailure(req.clientAddress);
+            server.reportAuthFailure(req.source());
             return HttpResponse::json(obj, 401);
         }
         return HttpResponse::error(500, "Internal error");
@@ -560,7 +554,7 @@ void registerShareRoutes(HttpServer& server, ShareManager& share, const ShareRou
             if (slot < 0 ||
                 share.slotForCookie(HttpServer::cookieFromRequest(req, kPlayerCookie)) != slot ||
                 share.state(slot) == ShareManager::State::Off) {
-                server.reportAuthFailure(req.clientAddress);
+                server.reportAuthFailure(req.source());
                 QJsonObject obj;
                 obj[QStringLiteral("error")] = QStringLiteral("dead_link");
                 respond(HttpResponse::json(obj, 403));

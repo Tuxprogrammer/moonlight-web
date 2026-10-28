@@ -104,6 +104,14 @@ struct Request
 /// instead of silently opening a gate (a lost Sec-Fetch-Site would).
 Request describe(const HttpRequest& req);
 
+/// The address every "where does the caller sit" judgement reads: the socket
+/// peer, never the client a trusted proxy forwards (HttpRequest::source()).
+/// HttpServer feeds this, and only this, to isLocalRequest() for peerLocal.
+inline const QString& privilegeAddress(const HttpRequest& req)
+{
+    return req.clientAddress;
+}
+
 /// What the server knows about the caller, independent of the request itself.
 struct Context
 {

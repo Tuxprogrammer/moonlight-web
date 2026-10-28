@@ -437,3 +437,19 @@
     background: var(--surface-2);
     border-radius: 6px;
 }
+
+/* Trusted reverse proxies (Advanced): the list beside its SAVE, one entry
+   per line; the button drops under the field on a narrow screen. */
+.admin-trusted-proxies-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: var(--space-2);
+}
+.admin-trusted-proxies {
+    flex: 1 1 16rem;
+    min-width: 0;
+    resize: vertical;
+    font-size: 0.9rem;
+    letter-spacing: 0;
+}
