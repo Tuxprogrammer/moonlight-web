@@ -43,6 +43,8 @@ export default defineConfig({
                 'js/util/homeScreenKeys.js',
                 'js/ui/ClipboardPanel.js',
                 'js/util/TransportChoice.js',
+                'js/util/oidcLogin.js',
+                'js/ui/AdminOidcSection.js',
                 'js/stream/JitterController.js',
                 'js/stream/PeriodicStallDetector.js',
                 'js/stream/PipelineDiag.js',

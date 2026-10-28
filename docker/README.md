@@ -301,6 +301,8 @@ docker run --rm -v mw-data:/data -v "$PWD:/backup" debian:trixie-slim \
 | `MW_HTTP_PORT` | `80` | HTTP listener (HTTP-to-HTTPS redirect). |
 | `MW_UPNP` | `1` | `0` stops the app asking the router to map ports — set it on a bridge network, where the request cannot reach a router anyway. |
 | `MW_ALLOWED_TRANSPORTS` | `all` | Which transports streams may use: `all`, `webrtc` (no WebSocket relay) or `wss` (WebSocket only, WebRTC off). Written into `settings.json` on every start; the admin page's **Allowed transports** is the same setting. |
+| `MW_OIDC_ISSUER`, `MW_OIDC_CLIENT_ID` | unset | The OpenID Connect provider and the client id it knows MoonlightWeb as. Written into `settings.json` on every start; the login itself is switched on from the admin page. See [Security §6.2.3](../docs/wiki/06-Security.md#623-openid-connect-sign-in). |
+| `MW_OIDC_CLIENT_SECRET`, `MW_OIDC_CLIENT_SECRET_FILE` | unset | The client secret, or the path of a file holding it (a Docker secret). Read by the server, never written to `settings.json`, and preferred over a secret saved on the admin page. Unset: a public client, protected by PKCE. |
 | `TZ` | `Etc/UTC` | Timestamps in the logs and the admin UI. |
 | `MW_DOMAIN`, `MW_PDNS_TOKEN` | baked in | The rendezvous domain and the shared API key for the update relay and aggregate metrics. The official images carry the project's, exactly like the `.deb`; without them the container never contacts our infrastructure. |
 

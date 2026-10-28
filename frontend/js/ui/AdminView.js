@@ -35,6 +35,7 @@ import { escapeHtml } from '../util/escapeHtml.js';
 import { refreshClientLog } from '../util/ClientLog.js';
 import { GamepadDriverNotice } from './GamepadDriverNotice.js';
 import { ALLOWED_TRANSPORTS } from '../util/TransportChoice.js';
+import { AdminOidcSection } from './AdminOidcSection.js';
 
 export class AdminView {
     // Backend statusJson "phase" values that mean activation is still running.
@@ -193,6 +194,8 @@ export class AdminView {
         // puts the streaming sessions first; clicking a header takes over.
         this._sessionSortKey = '';
         this._sessionSortDir = 'asc';
+        // Sign-in with an identity provider: a section of its own (AdminOidcSection).
+        this._oidc = new AdminOidcSection();
     }
 
     async start() {
@@ -210,6 +213,7 @@ export class AdminView {
         await this._loadHostApps();
         await this._loadInternetState();
         await this._loadSessions();
+        await this._oidc.load();
         this.render();
         this.bindEvents();
         // Provisioning may have started Internet Access before the page opened;
@@ -819,6 +823,8 @@ export class AdminView {
 
                 ${this._renderRemoteAdmin()}
 
+                ${this._oidc.render()}
+
                 <!-- Internet -->
                 <div class="settings-section" id="admin-section-internet">
                     <h3 class="settings-section-title">${t('admin.internet')}${
@@ -1374,6 +1380,8 @@ export class AdminView {
     }
 
     bindEvents() {
+        this._oidc.bind(this.container);
+
         // "Your controller has no driver" — the other half of the notice the
         // hosts page shows. Here too because this is the page someone opens
         // when something on the host is not working, and it is where they will

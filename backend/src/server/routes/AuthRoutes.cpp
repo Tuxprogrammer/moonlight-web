@@ -27,6 +27,7 @@
 #include "common/PairingCrypto.h"
 
 #include <QCoreApplication>
+#include <QDateTime>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -43,13 +44,18 @@ namespace {
  * later either — the periodic refresh in /api/auth/status would otherwise
  * promote a temporary login to 90 days behind the user's back.
  */
-QString sessionCookie(const QString& token, bool remember)
+QString sessionCookie(const QString& token, bool remember, qint64 maxAge = 7776000)
 {
     QString cookie =
         QStringLiteral("mw_session=%1; HttpOnly; Secure; Path=/; SameSite=Strict").arg(token);
-    if (remember) cookie += QStringLiteral("; Max-Age=7776000");
+    if (remember) cookie += QStringLiteral("; Max-Age=%1").arg(qMax<qint64>(0, maxAge));
     return cookie;
 }
+
+/// How long after an OIDC login the browser may still bind its MW-BIND-v1 key
+/// from outside the LAN (see /api/auth/pairing-key). The page binds on its first
+/// load, seconds after the callback; a cookie stolen later cannot add a key.
+constexpr qint64 kOidcBindWindowSecs = 600;
 
 /// Expire the session cookie immediately (logout).
 QString clearedSessionCookie()
@@ -110,6 +116,16 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         QString certificate = body["certificate"].toString();
         QString machineName = body["machine_name"].toString();
         const bool remember = wantsRemember(body);
+
+        // oidc_disable_pin: the identity provider is the only door. Both the
+        // PIN and the certificate file are refused, plainly and before either
+        // is looked at, so no attempt is ever counted against anyone.
+        if (Oidc::pinDisabled(settings.oidcSettings())) {
+            QJsonObject obj;
+            obj["status"] = "error";
+            obj["error"] = "pin_disabled";
+            return HttpResponse::json(obj, 403);
+        }
 
         // ── Certificate authentication (alternative to PIN) ────────────
         if (!certificate.isEmpty() && authManager.certAuthEnabled()) {
@@ -295,8 +311,16 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         if (!authManager.validateSession(token))
             return HttpResponse::error(401, "Not authenticated");
 
+        // An OIDC login is a fresh proof, like the PIN that carries a key in its
+        // body: the provider vouched for this person a moment ago, wherever they
+        // are. So its first minutes stand in for the network check.
+        const SessionInfo session = authManager.sessionForToken(token);
+        const bool freshOidc =
+            session.authMethod == QLatin1String("oidc") &&
+            QDateTime::currentSecsSinceEpoch() - session.createdAt <= kOidcBindWindowSecs;
+
         const NetClassify::Kind kind = NetClassify::classify(req.clientAddress);
-        if (!NetClassify::isTrustedPeer(kind)) {
+        if (!NetClassify::isTrustedPeer(kind) && !freshOidc) {
             Logger::warning(QStringLiteral("[Auth] Refused silent pairing-key registration from %1 "
                                            "(%2) — PIN required from the internet")
                                 .arg(req.clientAddress, NetClassify::toString(kind)));
@@ -479,7 +503,8 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
     });
 
     // GET /api/auth/status — check current auth status
-    server.router()->get("/api/auth/status", [&authManager, &geoIpService](const HttpRequest& req) {
+    server.router()->get("/api/auth/status", [&authManager, &geoIpService,
+                                              &settings](const HttpRequest& req) {
         QJsonObject obj;
         QString authedToken; // set when a valid session cookie is found below
 
@@ -564,13 +589,34 @@ void registerAuthRoutes(HttpServer& server, AuthManager& authManager, GeoIpServi
         // session, a host-key browser on the public domain has one.
         obj["has_session"] = authManager.validateSession(HttpServer::sessionTokenFromRequest(req));
 
+        // OpenID Connect: whether to offer the button here (on a configured
+        // origin only, never through the tunnel, never in a booth), and whether
+        // the PIN form is gone.
+        const Oidc::Settings oidc = settings.oidcSettings();
+        obj["oidc"] = QJsonObject{
+            {"enabled", Oidc::isUsable(oidc) && !req.viaTunnel && !req.adminLocked &&
+                            !Oidc::originFor(oidc, req.headers.value("host")).isEmpty()},
+            {"label", oidc.buttonLabel},
+            {"pin_disabled", Oidc::pinDisabled(oidc)}};
+        const SessionInfo session =
+            authManager.sessionForToken(HttpServer::sessionTokenFromRequest(req));
+        if (obj["has_session"].toBool() && session.authMethod == QLatin1String("oidc")) {
+            obj["auth_method"] = "oidc";
+            obj["display_name"] = session.displayName;
+        }
+
         HttpResponse resp = HttpResponse::json(obj);
         // Slide the cookie browser-side too, so an active client keeps a fresh
         // 90-day window without ever re-entering the PIN. A session the visitor
-        // asked not to remember stays session-scoped — see sessionCookie().
+        // asked not to remember stays session-scoped — see sessionCookie(). An
+        // OIDC session does not slide: its cookie keeps the session's own end.
         if (!authedToken.isEmpty()) {
+            const SessionInfo authed = authManager.sessionForToken(authedToken);
             resp.headers["Set-Cookie"] =
-                sessionCookie(authedToken, !authManager.isEphemeralSession(authedToken));
+                authed.expiresAt > 0
+                    ? sessionCookie(authedToken, true,
+                                    authed.expiresAt - QDateTime::currentSecsSinceEpoch())
+                    : sessionCookie(authedToken, !authManager.isEphemeralSession(authedToken));
         }
         return resp;
     });

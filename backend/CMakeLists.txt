@@ -278,9 +278,13 @@ target_link_libraries(qmdnsengine PUBLIC Qt6::Network)
 add_executable(mw-server
     src/main.cpp
     src/common/PairingCrypto.cpp
+    src/common/JwtVerifier.cpp
     src/streaming/SdpFingerprint.cpp
     src/server/AuthManager.cpp
     src/server/AppSettings.cpp
+    src/server/OidcFlow.cpp
+    src/server/OidcLogin.cpp
+    src/network/OidcClient.cpp
     src/server/Provisioning.cpp
     src/server/ConnectionGuard.cpp
     src/server/HttpServer.cpp
@@ -295,6 +299,7 @@ add_executable(mw-server
     src/server/ShareManager.cpp
     src/server/SessionPool.cpp
     src/server/routes/AuthRoutes.cpp
+    src/server/routes/OidcRoutes.cpp
     src/server/routes/HostRoutes.cpp
     src/server/routes/HostAppRoutes.cpp
     src/server/HostAppImage.cpp
@@ -696,6 +701,12 @@ if(MW_BUILD_TESTS)
         tests/test_pairing_binding.cpp
         src/common/PairingCrypto.cpp
         src/streaming/SdpFingerprint.cpp
+        # OpenID Connect: the ID-token check and the login's decisions (state
+        # binding, URL rules, groups) — the code between a provider and a session.
+        tests/test_jwt_verifier.cpp
+        tests/test_oidc_rules.cpp
+        src/common/JwtVerifier.cpp
+        src/server/OidcFlow.cpp
         src/common/Logger.cpp
     )
     set_target_properties(mw-security-tests PROPERTIES AUTOMOC ON)

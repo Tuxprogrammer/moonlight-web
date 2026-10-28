@@ -18,9 +18,11 @@
 /**
  * MoonlightWeb — Login View
  *
- * Authentication for remote visitors. Supports two methods:
+ * Authentication for remote visitors. Supports three methods:
  *   1. PIN-based (default): user enters the PIN shown on the admin page
  *   2. Certificate-based (alternative): user uploads a certificate file
+ *   3. OpenID Connect: "Sign in with …", when the operator configured an
+ *      identity provider — beside the PIN, or instead of it (oidc_disable_pin)
  *
  * When certificate authentication is enabled on the server, the UI shows
  * a toggle between PIN and certificate modes.
@@ -32,6 +34,14 @@ import { escapeHtml } from '../util/escapeHtml.js';
 import { InstanceMenu } from './InstanceMenu.js';
 import { currentInstanceRef, listInstances } from '../util/instances.js';
 import { tunnelHostId } from '../net/tunnelBridge.js';
+import {
+    clearOidcError,
+    oidcButtonText,
+    oidcErrorFrom,
+    oidcErrorMessage,
+    oidcStatus,
+    startOidcLogin,
+} from '../util/oidcLogin.js';
 
 /** The session name last signed in under (see rememberedMachineName). */
 const MACHINE_NAME_KEY = 'mw-session-name';
@@ -68,6 +78,8 @@ export class LoginView {
         // then dies with the browser and the server expires the session in hours
         // rather than 90 days.
         this._remember = true;
+        // OpenID Connect, as /api/auth/status describes it (util/oidcLogin.js).
+        this._oidc = { enabled: false, label: '', pinDisabled: false };
     }
 
     async start() {
@@ -99,7 +111,15 @@ export class LoginView {
                 return;
             }
             this._loading = false;
-            this._certAuthAvailable = status.cert_auth_enabled || false;
+            this._oidc = oidcStatus(status);
+            // Back from a refused sign-in: say why, once.
+            const oidcError = oidcErrorFrom(window.location.search);
+            if (oidcError) {
+                this._error = oidcErrorMessage(oidcError);
+                clearOidcError();
+            }
+            this._certAuthAvailable =
+                (status.cert_auth_enabled || false) && !this._oidc.pinDisabled;
             this._remaining = status.remaining !== undefined ? status.remaining : 3;
             if (status.lockout_seconds > 0) {
                 this._startLockoutTimer(status.lockout_seconds);
@@ -228,9 +248,7 @@ export class LoginView {
                                 <p>${t('login.connecting')}</p>
                             </div>
                         `
-                                : this._certMode
-                                  ? this._renderCertForm()
-                                  : this._renderPinForm()
+                                : this._renderForms()
                         }
                     </div>
 
@@ -251,7 +269,7 @@ export class LoginView {
                     }
 
                     ${
-                        !this._loading && !this._certMode
+                        !this._loading && !this._certMode && !this._oidc.pinDisabled
                             ? `
                         <p class="login-hint">${t('login.pinHint')}</p>
                     `
@@ -271,6 +289,32 @@ export class LoginView {
                 </div>
             </div>
         `;
+    }
+
+    /**
+     * The sign-in button above the PIN (or alone, when the provider is the only
+     * door), then the PIN or certificate form unless the server disabled them.
+     */
+    _renderForms() {
+        const oidc = this._oidc.enabled
+            ? `
+            <div class="login-form login-form--oidc">
+                <button id="btn-login-oidc" class="btn btn-neutral login-submit">
+                    ${this.esc(oidcButtonText(this._oidc.label))}
+                </button>
+                ${this._oidc.pinDisabled ? `<p id="login-error" class="login-error">${this.esc(this._error)}</p>` : `<p class="login-or">${t('login.oidcOr')}</p>`}
+            </div>`
+            : '';
+        if (this._oidc.pinDisabled) {
+            // Nothing to type, and no button either: this address is not one the
+            // provider can send anyone back to (or it is the entry link).
+            return (
+                oidc ||
+                `<div class="login-form"><p class="login-subtitle">${t('login.oidcUnavailableHere')}</p>
+                 <p id="login-error" class="login-error">${this.esc(this._error)}</p></div>`
+            );
+        }
+        return oidc + (this._certMode ? this._renderCertForm() : this._renderPinForm());
     }
 
     _renderPinForm() {
@@ -492,6 +536,15 @@ export class LoginView {
         if (rememberCheck) {
             rememberCheck.addEventListener('change', () => {
                 this._remember = rememberCheck.checked;
+            });
+        }
+
+        const oidcBtn = this.container.querySelector('#btn-login-oidc');
+        if (oidcBtn) {
+            oidcBtn.addEventListener('click', (e) => {
+                e.preventDefault();
+                oidcBtn.disabled = true;
+                startOidcLogin();
             });
         }
 

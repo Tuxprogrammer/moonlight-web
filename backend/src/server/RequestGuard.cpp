@@ -288,8 +288,11 @@ Decision evaluate(const Request& req, const Context& ctx)
     // privileges as the host. Note that its *unlock* is gated separately (LAN
     // peer, trusted Host, rate limit) — by the time adminSession is set, that
     // check has already passed.
-    d.adminPrivilege =
-        !ctx.adminLocked && (d.hostMachine || ctx.adminSession) && (!mutating || ctx.adminKeyOk);
+    // An OIDC session of an admin group is the third: the identity provider
+    // vouched for the person, which proves nothing about where they sit, so it
+    // grants admin rights and never hostMachine.
+    d.adminPrivilege = !ctx.adminLocked && (d.hostMachine || ctx.adminSession || ctx.oidcAdmin) &&
+                       (!mutating || ctx.adminKeyOk);
 
     return d;
 }
@@ -300,7 +303,7 @@ AdminTokenReply adminTokenReply(const Decision& decision, const Context& ctx, bo
     if (ctx.adminLocked)
         return authenticated || decision.hostMachine ? AdminTokenReply::Empty
                                                      : AdminTokenReply::Deny;
-    if (decision.hostMachine || ctx.adminSession) return AdminTokenReply::Grant;
+    if (decision.hostMachine || ctx.adminSession || ctx.oidcAdmin) return AdminTokenReply::Grant;
     if (authenticated) return AdminTokenReply::Empty;
     return AdminTokenReply::Deny;
 }
