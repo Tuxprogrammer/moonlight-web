@@ -3439,6 +3439,8 @@ int main(int argc, char* argv[])
             clientKind == NetClassify::Kind::Public);
         chainIn.videoEnhancement = reqVideoEnhancement;
         chainIn.mediaTrackAllowed = streamMediaTrackAllowed(reqCodec, host);
+        // A page that found no RTCPeerConnection says so: no WebRTC rung then.
+        chainIn.webrtcAvailable = transportchain::webrtcCapable(body);
         const transportchain::Chain chain = transportchain::build(chainIn);
         const QStringList transportChain = chain.rungs;
         // Asked for by name and taken away: the session that runs is NOT the one
@@ -3456,8 +3458,16 @@ int main(int argc, char* argv[])
         qInfo() << "[Session] Transport chain:" << transportChain
                 << "requested index=" << reqTransportIndex;
 
-        if (transportChain.isEmpty() || reqTransportIndex < 0 ||
-            reqTransportIndex >= transportChain.size()) {
+        // Nothing this browser can use, before any attempt: say why, with a
+        // status the page does not answer by relaunching.
+        if (transportChain.isEmpty()) {
+            qWarning() << "[Session] No usable transport —"
+                       << transportchain::reasonName(chain.emptyReason);
+            respond(
+                HttpResponse::json(transportchain::noUsableTransportBody(chain.emptyReason), 409));
+            return;
+        }
+        if (reqTransportIndex < 0 || reqTransportIndex >= transportChain.size()) {
             qWarning() << "[Session] Transport index out of range — chain exhausted";
             respond(HttpResponse::error(502, "All transport modes failed"));
             return;
@@ -5421,11 +5431,15 @@ int main(int argc, char* argv[])
             req.viaTunnel, streamClientKind(req) == NetClassify::Kind::Public);
         chainIn.videoEnhancement = true;
         chainIn.mediaTrackAllowed = streamMediaTrackAllowed(codec, host);
+        chainIn.webrtcAvailable = transportchain::webrtcCapable(joinBody);
         const transportchain::Chain built = transportchain::build(chainIn);
         logUdpRungsDropped(built, debugDropUdp);
         const QStringList chain = built.rungs;
         if (chain.isEmpty()) {
-            respond(HttpResponse::error(502, "No usable transport"));
+            qWarning() << "[Session] Player slot" << slot << "has no usable transport —"
+                       << transportchain::reasonName(built.emptyReason);
+            respond(
+                HttpResponse::json(transportchain::noUsableTransportBody(built.emptyReason), 409));
             return;
         }
         // Past the end: the guest's browser walked every rung.

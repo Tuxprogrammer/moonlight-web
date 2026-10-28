@@ -10,9 +10,12 @@
 #include "test_framework.h"
 #include "streaming/TransportChain.h"
 
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSet>
 
 using transportchain::Chain;
+using transportchain::EmptyReason;
 using transportchain::Inputs;
 
 namespace {
@@ -190,57 +193,192 @@ void testPlayerRows()
     CHECK_EQ(build(p).rungs, (QStringList{DCT, MT}));
 }
 
-// Every combination: modes × body modes × the four booleans.
+void testWebrtcUnavailable()
+{
+    SECTION("TransportChain: capabilities.webrtc = false");
+    using transportchain::build;
+
+    // No WebRTC in this browser: every webrtc-* rung goes, whatever the order.
+    Inputs in = make(QStringLiteral("auto"));
+    in.webrtcAvailable = false;
+    Chain c = build(in);
+    CHECK_EQ(c.rungs, (QStringList{WSS}));
+    CHECK(c.emptyReason == EmptyReason::None);
+    in.videoEnhancement = true;
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+    in.mediaTrackAllowed = false;
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+    // A WebRTC mode asked for by name goes too, from the admin or the request.
+    in.adminMode = MU;
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+    in.bodyMode = DCT;
+    CHECK_EQ(build(in).rungs, (QStringList{WSS}));
+    // Blocked UDP changes nothing more: wss is TCP.
+    in.dropUdp = true;
+    c = build(in);
+    CHECK_EQ(c.rungs, (QStringList{WSS}));
+    CHECK(!c.udpDropped);
+
+    // Through the rendezvous nothing is left: the browser is the reason, since
+    // WebRTC is what a rendezvous browser streams on.
+    in = make(QStringLiteral("auto"));
+    in.webrtcAvailable = false;
+    in.viaTunnel = true;
+    c = build(in);
+    CHECK(c.rungs.isEmpty());
+    CHECK(c.emptyReason == EmptyReason::WebrtcUnavailable);
+    // wss asked for by name there: still reported as dropped.
+    in.adminMode = WSS;
+    c = build(in);
+    CHECK(c.rungs.isEmpty());
+    CHECK_EQ(c.dropped, WSS);
+    CHECK(c.emptyReason == EmptyReason::WebrtcUnavailable);
+
+    // A WebRTC browser: the field changes nothing.
+    in = make(QStringLiteral("auto"));
+    CHECK(in.webrtcAvailable); // absent means available
+    CHECK_EQ(build(in).rungs, (QStringList{DCU, DCT, MU, MT, WSS}));
+}
+
+void testUnknownModes()
+{
+    SECTION("TransportChain: unknown modes read as auto");
+    using transportchain::build;
+    using transportchain::isRung;
+
+    for (const QString& r : {DCU, DCT, MU, MT, WSS})
+        CHECK(isRung(r));
+    CHECK(!isRung(QStringLiteral("auto")));
+    CHECK(!isRung(QStringLiteral("all")));
+    CHECK(!isRung(QString()));
+    CHECK(!isRung(QStringLiteral("WSS")));
+    CHECK(!isRung(QStringLiteral("webrtc")));
+    CHECK(!isRung(QStringLiteral("webrtc-dc")));
+
+    // A typo in settings.json: the auto chain, not a rung named "foo" that
+    // would have run as wss (and through the rendezvous, as nothing).
+    Chain c = build(make(QStringLiteral("foo")));
+    CHECK_EQ(c.mode, QStringLiteral("auto"));
+    CHECK_EQ(c.rungs, (QStringList{DCU, DCT, MU, MT, WSS}));
+    // An unknown request mode is ignored: the admin's applies.
+    c = build(make(WSS, QStringLiteral("webrtc")));
+    CHECK_EQ(c.mode, WSS);
+    CHECK_EQ(c.rungs.first(), WSS);
+    c = build(make(QStringLiteral("auto"), QStringLiteral("garbage-udp")));
+    CHECK_EQ(c.rungs, (QStringList{DCU, DCT, MU, MT, WSS}));
+}
+
+void testEmptyReasonWire()
+{
+    SECTION("TransportChain: the 409 body");
+    using transportchain::noUsableTransportBody;
+    using transportchain::reasonName;
+    CHECK_EQ(QString::fromLatin1(reasonName(EmptyReason::WebrtcUnavailable)),
+             QStringLiteral("webrtc_unavailable"));
+    CHECK_EQ(QString::fromLatin1(reasonName(EmptyReason::Policy)), QStringLiteral("policy"));
+    CHECK_EQ(QString::fromLatin1(reasonName(EmptyReason::Tunnel)), QStringLiteral("tunnel"));
+    CHECK_EQ(QString::fromLatin1(reasonName(EmptyReason::UdpBlocked)),
+             QStringLiteral("udp_blocked"));
+    CHECK_EQ(QString::fromLatin1(reasonName(EmptyReason::None)), QString());
+
+    const QJsonObject body = noUsableTransportBody(EmptyReason::WebrtcUnavailable);
+    CHECK_EQ(body.value(QStringLiteral("error")).toString(), QStringLiteral("no_usable_transport"));
+    CHECK_EQ(body.value(QStringLiteral("reason")).toString(), QStringLiteral("webrtc_unavailable"));
+    CHECK_EQ(body.size(), 2);
+}
+
+void testCapabilitiesParsing()
+{
+    SECTION("TransportChain: capabilities read off the request");
+    using transportchain::webrtcCapable;
+    auto parse = [](const char* json) {
+        return QJsonDocument::fromJson(QByteArray(json)).object();
+    };
+    // An older page sends nothing: WebRTC assumed, as before.
+    CHECK(webrtcCapable(parse("{}")));
+    CHECK(webrtcCapable(parse(R"({"capabilities":{}})")));
+    CHECK(webrtcCapable(parse(R"({"capabilities":{"webrtc":true}})")));
+    CHECK(!webrtcCapable(parse(R"({"capabilities":{"webrtc":false}})")));
+    // Only a real false counts: anything else is not this browser's verdict.
+    CHECK(webrtcCapable(parse(R"({"capabilities":{"webrtc":"false"}})")));
+    CHECK(webrtcCapable(parse(R"({"capabilities":{"webrtc":0}})")));
+    CHECK(webrtcCapable(parse(R"({"capabilities":false})")));
+    CHECK(webrtcCapable(parse(R"({"capabilities":[false]})")));
+    CHECK(webrtcCapable(parse(R"({"webrtc":false})")));
+}
+
+// Every combination: modes × body modes × the five booleans.
 void testInvariants()
 {
     SECTION("TransportChain: invariants over every combination");
     using transportchain::build;
-    const QStringList modes{
-        QString(), QStringLiteral("auto"), QStringLiteral("all"), DCU, DCT, MU, MT, WSS};
+    const QStringList modes{QString(),
+                            QStringLiteral("auto"),
+                            QStringLiteral("all"),
+                            QStringLiteral("bogus"),
+                            DCU,
+                            DCT,
+                            MU,
+                            MT,
+                            WSS};
+    auto known = [](const QString& m) {
+        return m == QStringLiteral("auto") || m == QStringLiteral("all") ||
+               transportchain::isRung(m);
+    };
     int combos = 0;
     for (const QString& admin : modes)
         for (const QString& body : modes)
-            for (int bits = 0; bits < 16; ++bits) {
+            for (int bits = 0; bits < 32; ++bits) {
                 Inputs in = make(admin, body);
                 in.viaTunnel = bits & 1;
                 in.dropUdp = bits & 2;
                 in.videoEnhancement = bits & 4;
                 in.mediaTrackAllowed = bits & 8;
+                in.webrtcAvailable = !(bits & 16);
                 const Chain c = build(in);
                 ++combos;
 
-                // Never empty, never a duplicate.
-                CHECK(!c.rungs.isEmpty());
+                // Empty only for a browser without WebRTC through the
+                // rendezvous, and then it says why.
+                const bool expectEmpty = !in.webrtcAvailable && in.viaTunnel;
+                CHECK_EQ(c.rungs.isEmpty(), expectEmpty);
+                CHECK(c.emptyReason ==
+                      (expectEmpty ? EmptyReason::WebrtcUnavailable : EmptyReason::None));
+                // Never a duplicate, never anything but a known rung.
                 CHECK_EQ(QSet<QString>(c.rungs.begin(), c.rungs.end()).size(),
                          static_cast<int>(c.rungs.size()));
+                for (const QString& r : c.rungs)
+                    CHECK(transportchain::isRung(r));
                 // No wss through the rendezvous.
                 if (in.viaTunnel) CHECK(!c.rungs.contains(WSS));
+                // No WebRTC rung for a browser without it.
+                if (!in.webrtcAvailable) CHECK(c.rungs.isEmpty() || c.rungs == QStringList{WSS});
                 // Blocked UDP leaves no UDP rung (a TCP one always remains).
-                if (in.dropUdp) {
-                    for (const QString& r : c.rungs)
-                        CHECK(!r.endsWith(QStringLiteral("-udp")));
-                    CHECK(c.udpDropped);
-                } else {
-                    CHECK(!c.udpDropped);
-                }
-                // The effective mode: body over admin, "all"/empty read as auto.
-                QString expected = body.isEmpty() ? (admin.isEmpty() ? "auto" : admin) : body;
+                for (const QString& r : c.rungs)
+                    if (in.dropUdp) CHECK(!r.endsWith(QStringLiteral("-udp")));
+                CHECK_EQ(c.udpDropped, in.dropUdp && in.webrtcAvailable);
+                // The effective mode: a known body mode over a known admin
+                // mode; "all", empty and unknown read as auto.
+                QString expected = QStringLiteral("auto");
+                if (known(admin)) expected = admin;
+                if (known(body)) expected = body;
                 if (expected == QStringLiteral("all")) expected = QStringLiteral("auto");
                 CHECK_EQ(c.mode, expected);
                 // A forced mode that can run here leads the chain.
-                const bool forcedRuns = expected != QStringLiteral("auto") &&
-                                        !(in.viaTunnel && expected == WSS) &&
-                                        !(in.dropUdp && expected.endsWith(QStringLiteral("-udp")));
+                const bool forcedRuns =
+                    expected != QStringLiteral("auto") && !(in.viaTunnel && expected == WSS) &&
+                    !(in.dropUdp && expected.endsWith(QStringLiteral("-udp"))) &&
+                    !(!in.webrtcAvailable && expected != WSS);
                 if (forcedRuns) CHECK_EQ(c.rungs.first(), expected);
                 CHECK_EQ(c.dropped.isEmpty(), !(in.viaTunnel && expected == WSS));
                 // MediaTrack only as the forced mode when the codec is not H.264.
                 if (!in.mediaTrackAllowed)
                     for (const QString& r : c.rungs)
                         if (r.startsWith(QStringLiteral("webrtc-media"))) CHECK_EQ(r, expected);
-                // DataChannel TCP is always there: the rung that works anywhere.
-                CHECK(c.rungs.contains(DCT));
+                // DataChannel TCP is there whenever WebRTC is: it works anywhere.
+                if (in.webrtcAvailable) CHECK(c.rungs.contains(DCT));
             }
-    CHECK_EQ(combos, 8 * 8 * 16);
+    CHECK_EQ(combos, 9 * 9 * 32);
 }
 
 } // namespace
@@ -252,5 +390,9 @@ void run_transport_chain_tests()
     testAutoOrder();
     testExplicitRows();
     testPlayerRows();
+    testWebrtcUnavailable();
+    testUnknownModes();
+    testEmptyReasonWire();
+    testCapabilitiesParsing();
     testInvariants();
 }

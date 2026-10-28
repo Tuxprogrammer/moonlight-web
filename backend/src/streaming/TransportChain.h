@@ -22,6 +22,7 @@
 
 #include <Limelight.h>
 
+#include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
@@ -40,6 +41,17 @@ struct Inputs
     bool dropUdp = false;                       ///< udpRungsDropped()'s verdict
     bool videoEnhancement = false;              ///< canvas rungs before MediaTrack
     bool mediaTrackAllowed = true;              ///< mediaTrackAllowed()'s verdict for the codec
+    bool webrtcAvailable = true;                ///< the request's capabilities.webrtc
+};
+
+/// Why a chain came out empty before any attempt: the 409's `reason`.
+enum class EmptyReason
+{
+    None,
+    WebrtcUnavailable, ///< the browser has no WebRTC, and wss cannot run here
+    Policy,            ///< the admin's allowed transports leave nothing usable
+    Tunnel,            ///< only wss was left, and the rendezvous cannot carry it
+    UdpBlocked,        ///< reserved: blocked UDP never empties a chain (a TCP rung stays)
 };
 
 struct Chain
@@ -48,7 +60,46 @@ struct Chain
     QString mode;            ///< "auto", or the transport asked for by name
     QString dropped;         ///< asked for by name and impossible here ("wss" via the rendezvous)
     bool udpDropped = false; ///< the UDP rungs were skipped
+    EmptyReason emptyReason = EmptyReason::None;
 };
+
+/// The wire name of @p r; empty for None.
+inline const char* reasonName(EmptyReason r)
+{
+    switch (r) {
+    case EmptyReason::WebrtcUnavailable: return "webrtc_unavailable";
+    case EmptyReason::Policy: return "policy";
+    case EmptyReason::Tunnel: return "tunnel";
+    case EmptyReason::UdpBlocked: return "udp_blocked";
+    case EmptyReason::None: break;
+    }
+    return "";
+}
+
+/// The body of the 409 an empty chain answers: the page explains, and does not
+/// relaunch into a chain that has nothing to offer.
+inline QJsonObject noUsableTransportBody(EmptyReason r)
+{
+    return QJsonObject{{QStringLiteral("error"), QStringLiteral("no_usable_transport")},
+                       {QStringLiteral("reason"), QString::fromLatin1(reasonName(r))}};
+}
+
+/// One of the five transports a chain is made of.
+inline bool isRung(const QString& m)
+{
+    return m == QLatin1String("webrtc-dc-udp") || m == QLatin1String("webrtc-dc-tcp") ||
+           m == QLatin1String("webrtc-media-udp") || m == QLatin1String("webrtc-media-tcp") ||
+           m == QLatin1String("wss");
+}
+
+/// The request's `capabilities: { webrtc }`. Only a real false counts: an older
+/// page sends nothing, and gets the WebRTC rungs it always had.
+inline bool webrtcCapable(const QJsonObject& body)
+{
+    const QJsonValue v =
+        body.value(QStringLiteral("capabilities")).toObject().value(QStringLiteral("webrtc"));
+    return !(v.isBool() && !v.toBool());
+}
 
 /// Does a host advertising @p support (SCM_* bits) carry codec @p c?
 /// The canonical SCM_MASK_* values: Sunshine reports HEVC at 0x100, AV1 at 0x10000.
@@ -109,9 +160,13 @@ inline Chain build(const Inputs& in)
     Chain out;
 
     // A per-request transport_mode overrides the admin setting; "all" is the
-    // auto chain (it only makes the admin selector offer wss as well).
-    QString mode = in.adminMode.isEmpty() ? QStringLiteral("auto") : in.adminMode;
-    if (!in.bodyMode.isEmpty()) mode = in.bodyMode;
+    // auto chain (it only makes the admin selector offer wss as well). A name
+    // that is no transport is ignored: it would otherwise run as wss.
+    auto known = [](const QString& m) {
+        return m == QLatin1String("auto") || m == QLatin1String("all") || isRung(m);
+    };
+    QString mode = known(in.adminMode) ? in.adminMode : QStringLiteral("auto");
+    if (known(in.bodyMode)) mode = in.bodyMode;
     if (mode == QStringLiteral("all")) mode = QStringLiteral("auto");
     out.mode = mode;
 
@@ -135,6 +190,17 @@ inline Chain build(const Inputs& in)
     if (in.viaTunnel && out.rungs.contains(QStringLiteral("wss"))) {
         out.rungs.removeAll(QStringLiteral("wss"));
         if (mode == QStringLiteral("wss")) out.dropped = QStringLiteral("wss");
+    }
+
+    // A browser without WebRTC (capabilities.webrtc false): every webrtc-* rung
+    // would fail on its deadline, so none is offered. Through the rendezvous
+    // that leaves nothing, and the browser is why.
+    if (!in.webrtcAvailable) {
+        QStringList kept;
+        for (const QString& m : out.rungs)
+            if (!m.startsWith(QStringLiteral("webrtc-"))) kept.append(m);
+        out.rungs = kept;
+        if (out.rungs.isEmpty()) out.emptyReason = EmptyReason::WebrtcUnavailable;
     }
 
     // Blocked UDP: skip the UDP rungs, never down to nothing.
