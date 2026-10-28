@@ -68,7 +68,7 @@ inline bool allowed(const QString& type, const Policy& p)
         type == QLatin1String("fpsstep"))
         return true;
     if (type == QLatin1String("inputstate")) return true;
-    return p.keyboardMouse; // key*, mouse*, wheel, textinput, locksync, clipboard
+    return p.keyboardMouse; // key*, mouse*, wheel, textinput, locksync, clipboardpaste/set
 }
 
 } // namespace InputMsg

@@ -17,6 +17,8 @@
 
 #pragma once
 
+#include "ClipboardMessage.h"
+
 #include <QObject>
 #include <QString>
 
@@ -33,6 +35,9 @@ class IMediaEngine;
 /// clipboard and injects the paste chord in the same main-thread hop, so the
 /// keystrokes can never overtake the clipboard write.
 ///
+/// The clipboard panel's Send sends 'clipboardset' instead: setFromClient()
+/// commits the text and injects nothing.
+///
 /// Host → local: QClipboard::dataChanged is monitored on the main thread and
 /// re-emitted as hostTextChanged(); relays forward it to the browser, which
 /// mirrors it via navigator.clipboard.writeText().
@@ -45,10 +50,8 @@ class ClipboardBridge : public QObject
     Q_OBJECT
 
 public:
-    /// Max text size relayed in either direction (UTF-16 code units). Larger
-    /// payloads are truncated: clipboard sync is for text, not file transfer,
-    /// and input-channel messages must stay well under SCTP message limits.
-    static constexpr int kMaxTextChars = 256 * 1024;
+    /// Max text size relayed in either direction — see ClipboardMessage.h.
+    static constexpr int kMaxTextChars = ClipboardMsg::kMaxTextChars;
 
     /// Lazily created singleton. The FIRST call must come from the Qt main
     /// thread so the bridge gets main-thread affinity — guaranteed today:
@@ -68,6 +71,17 @@ public:
     /// modifier doesn't map to Ctrl on the host (macOS Cmd arrives as Win).
     void pasteFromClient(IMediaEngine* engine, const QString& text, bool wrapCtrl);
 
+    /// Thread-safe. Queue onto the main thread: commit 'text' to the host
+    /// clipboard and press nothing.
+    void setFromClient(const QString& text);
+
+    /// Relay-thread entry for a decoded clipboard message (ClipboardMsg):
+    /// paste, set, or a debug line when it is ignored. Reaches instance()
+    /// only when there is something to do — an inactive relay must never be
+    /// the first caller (see instance()).
+    static void handleClientMessage(IMediaEngine* engine, const ClipboardMsg::Request& req,
+                                    const char* logTag);
+
     /// Thread-safe. Re-emit the current host clipboard text (initial sync
     /// when a client connects), even if unchanged since the last emission.
     void requestAnnounce();
@@ -81,6 +95,8 @@ signals:
 private:
     explicit ClipboardBridge(QObject* parent);
     void onClipboardChanged();
+    /// Main thread only: write 't' unless it is what the host already holds.
+    void commitText(const QString& t);
 
     /// Last text written or observed — suppresses the dataChanged echo of our
     /// own setText() and redundant re-pushes of an unchanged clipboard.

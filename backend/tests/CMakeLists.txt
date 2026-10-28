@@ -109,6 +109,7 @@ add_executable(run_tests
     test_us_scancode.cpp
     test_input_watchdog.cpp
     test_keyboard_layout.cpp
+    test_clipboard_message.cpp
     test_native_capabilities_json.cpp
     test_edition.cpp
     test_mdns_advertiser.cpp
