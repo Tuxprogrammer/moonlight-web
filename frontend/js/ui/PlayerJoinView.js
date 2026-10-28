@@ -24,6 +24,7 @@
  * Screens: pin → join → (stream) → ended | dead.
  */
 import { BackendClient } from '../api/BackendClient.js';
+import { noUsableTransportKey, noUsableTransportReason } from '../api/WebRtcSupport.js';
 import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
 import { IS_MOBILE_OR_TABLET, IS_TOUCH_DEVICE, hevcClientDecodes } from '../util/BrowserDetect.js';
@@ -498,12 +499,18 @@ export class PlayerJoinView {
                 // launches. Between the link being sent and this click, that app
                 // can have been removed from the host — say so, rather than
                 // leaving them with a generic failure they cannot act on.
+                // Or nothing the server offers is something this browser can
+                // carry (WebRTC off, and no WebSocket streaming): retrying
+                // will not change that, the message says what would.
+                const noTransport = noUsableTransportReason(ex);
                 err.textContent =
-                    code === 'stream_in_progress'
-                        ? t('player.busy')
-                        : code === 'app_unavailable'
-                          ? t('player.appGone')
-                          : t('player.joinFailed');
+                    noTransport !== null
+                        ? t(noUsableTransportKey(noTransport))
+                        : code === 'stream_in_progress'
+                          ? t('player.busy')
+                          : code === 'app_unavailable'
+                            ? t('player.appGone')
+                            : t('player.joinFailed');
                 err.hidden = false;
                 /** @type {HTMLButtonElement} */ (joinBtn).disabled = false;
                 joinBtn.textContent = t('player.joinButton');

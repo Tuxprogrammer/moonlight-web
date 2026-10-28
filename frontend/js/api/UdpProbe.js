@@ -4,6 +4,7 @@
  */
 
 import { defaultIceServers } from './IceServers.js';
+import { webrtcAvailable } from './WebRtcSupport.js';
 
 /**
  * Ask STUN, briefly, whether this browser can reach the internet over UDP.
@@ -21,11 +22,13 @@ import { defaultIceServers } from './IceServers.js';
  *
  * @param {number} [timeoutMs] how long to wait for the first answer
  * @returns {Promise<boolean|null>} true: UDP gets out; false: no STUN answer in
- *   time; null: this browser cannot ask (no WebRTC, or the probe threw).
+ *   time; null: this browser cannot ask (no WebRTC, or the probe threw). A
+ *   null is read with webrtcAvailable(): without WebRTC, every UDP rung is a
+ *   WebRTC one, and the launch tells the backend so (capabilities.webrtc).
  */
 export async function probeUdp(timeoutMs = 1500) {
+    if (!webrtcAvailable()) return null;
     const PC = globalThis.RTCPeerConnection;
-    if (typeof PC !== 'function') return null;
     let pc;
     try {
         pc = new PC({ iceServers: defaultIceServers() });

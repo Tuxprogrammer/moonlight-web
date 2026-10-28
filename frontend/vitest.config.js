@@ -60,6 +60,7 @@ export default defineConfig({
                 'js/i18n/i18n.js',
                 'js/api/BackendClient.js',
                 'js/api/FloodCounter.js',
+                'js/api/WebRtcSupport.js',
                 'js/hid/hidWire.js',
                 'js/hid/HidPassthrough.js',
                 'js/hid/hidppFfb.js',
