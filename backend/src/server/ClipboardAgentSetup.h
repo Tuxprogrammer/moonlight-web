@@ -102,14 +102,22 @@ inline QJsonObject describe(const QString& token, const QString& server, const Q
         quoted << (i % 2 ? shellQuote(args[i]) : args[i]);
 
     QString settings = QStringLiteral("MW_CLIPBOARD_AGENT_SERVER=%1\n").arg(server);
-    if (!pins.isEmpty())
-        settings += QStringLiteral("MW_CLIPBOARD_AGENT_PIN=%1\n").arg(pins.join(QLatin1Char(',')));
+    // One line on purpose: a pasted command with newlines inside its quotes
+    // is fragile (terminals warn, some shells run it piecewise), so printf
+    // writes the newlines and the values go in as quoted arguments.
+    QString format = QStringLiteral("MW_CLIPBOARD_AGENT_SERVER=%s\\n");
+    QString values = shellQuote(server);
+    if (!pins.isEmpty()) {
+        const QString pin = pins.join(QLatin1Char(','));
+        settings += QStringLiteral("MW_CLIPBOARD_AGENT_PIN=%1\n").arg(pin);
+        format += QStringLiteral("MW_CLIPBOARD_AGENT_PIN=%s\\n");
+        values += QLatin1Char(' ') + shellQuote(pin);
+    }
 
     const QString setup =
         QStringLiteral("mkdir -p ~/.config/moonlightweb && (umask 077 && printf '%s\\n' %1 > %2 "
-                       "&& printf '%s' %3 > %4)")
-            .arg(shellQuote(token), defaultTokenFile(), shellQuote(settings),
-                 defaultSettingsFile());
+                       "&& printf '%3' %4 > %5)")
+            .arg(shellQuote(token), defaultTokenFile(), format, values, defaultSettingsFile());
 
     QJsonObject o;
     o.insert(QStringLiteral("token"), token);

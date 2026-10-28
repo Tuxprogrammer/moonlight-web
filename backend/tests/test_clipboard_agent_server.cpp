@@ -35,6 +35,8 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QNetworkRequest>
+#include <QProcess>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QVariant>
 #include <QTemporaryDir>
@@ -931,6 +933,32 @@ void run_clipboard_agent_server_tests()
         CHECK(!settings.contains(token));
         CHECK(setup.contains(ClipboardAgentSetup::defaultSettingsFile()));
         CHECK_EQ(d.value("settings_file").toString(), ClipboardAgentSetup::defaultSettingsFile());
+        // One line, so a paste cannot be cut in pieces by the terminal.
+        CHECK(!setup.contains(QLatin1Char('\n')));
+#ifdef Q_OS_UNIX
+        // And it does what it says, in a real shell: both files, owner-only,
+        // with the newlines printf writes.
+        {
+            QTemporaryDir home;
+            QProcess sh;
+            QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+            env.insert("HOME", home.path());
+            sh.setProcessEnvironment(env);
+            sh.start("/bin/sh", {"-c", setup});
+            CHECK(sh.waitForFinished(5000));
+            CHECK_EQ(sh.exitCode(), 0);
+            QFile tf(home.filePath(".config/moonlightweb/clipboard-agent.token"));
+            QFile sf(home.filePath(".config/moonlightweb/clipboard-agent.env"));
+            CHECK(tf.open(QIODevice::ReadOnly));
+            CHECK(sf.open(QIODevice::ReadOnly));
+            CHECK_EQ(QString::fromUtf8(tf.readAll()), token + "\n");
+            CHECK_EQ(QString::fromUtf8(sf.readAll()), settings);
+            const auto loose = QFileDevice::ReadGroup | QFileDevice::ReadOther |
+                               QFileDevice::WriteGroup | QFileDevice::WriteOther;
+            CHECK_EQ(tf.permissions() & loose, QFileDevice::Permissions());
+            CHECK_EQ(sf.permissions() & loose, QFileDevice::Permissions());
+        }
+#endif
         // No pins: no --pin.
         const QJsonObject n = ClipboardAgentSetup::describe(token, "https://x:1", {});
         CHECK(!n.value("command").toString().contains("--pin"));
