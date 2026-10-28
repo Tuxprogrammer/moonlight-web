@@ -26,6 +26,9 @@
  * when), and while it is up nothing goes to the host: RemoteNav moves the
  * focus between its buttons and OK presses the one that has it.
  *
+ * Its "Clipboard" opens the clipboard panel (ClipboardPanel.js): a remote has
+ * no Ctrl+Alt+Shift to open it with.
+ *
  * Its "Mouse" turns the remote into the host's mouse (StreamView, with
  * stream/RemotePointer.js): the arrows steer the pointer, OK clicks, Ch+ and
  * Ch− scroll. Pressed again, the arrows go back to being arrows on the host.
@@ -44,6 +47,7 @@ export class StreamRemoteMenu {
      *           statsOn: () => boolean,
      *           onResume: () => void,
      *           onStats: () => void,
+     *           onClipboard?: () => void,
      *           pointerOn?: () => boolean,
      *           onPointer?: () => void,
      *           onStop: () => void,
@@ -88,6 +92,11 @@ export class StreamRemoteMenu {
                             : ''
                     }
                     <button type="button" class="btn btn-secondary" data-act="stats" aria-pressed="${this._opts.statsOn() ? 'true' : 'false'}">${escapeHtml(t('stream.remoteStats'))}</button>
+                    ${
+                        this._opts.onClipboard
+                            ? `<button type="button" class="btn btn-secondary" data-act="clipboard">${escapeHtml(t('clipboard.title'))}</button>`
+                            : ''
+                    }
                     <button type="button" class="btn btn-danger" data-act="stop">${escapeHtml(t('stream.remoteStop'))}</button>
                 </div>
             </div>
@@ -109,6 +118,7 @@ export class StreamRemoteMenu {
             const act = btn.getAttribute('data-act');
             if (act === 'resume') this._opts.onResume();
             else if (act === 'stop') this._opts.onStop();
+            else if (act === 'clipboard' && this._opts.onClipboard) this._opts.onClipboard();
             else if (act === 'stats') {
                 this._opts.onStats();
                 btn.setAttribute('aria-pressed', this._opts.statsOn() ? 'true' : 'false');

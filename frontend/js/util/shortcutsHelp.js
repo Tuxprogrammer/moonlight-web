@@ -54,6 +54,9 @@ export function keyboardShortcutRows(isMac) {
         [t('stream.scMouseMode'), ...mods, 'M'],
         [t('stream.scMute'), ...mods, 'S'],
         [t('stream.scStats'), ...mods, 'I'],
+        [t('stream.scClipboard'), ...mods, 'C'],
+        // The bare chord, Guacamole's gesture: the three pressed and let go alone.
+        [t('stream.scClipboardBare'), ...mods],
         [t('stream.scDesktopPrev'), ...mods, '←'],
         [t('stream.scDesktopNext'), ...mods, '→'],
     ];
@@ -78,6 +81,7 @@ export function gestureRows(touchScreen) {
               [t('stream.tcPanZoom'), t('stream.tcPanZoomVal')],
               [t('stream.tcDesktop'), t('stream.tcDesktopVal')],
               [t('stream.tcKeyboard'), t('stream.tcKeyboardVal')],
+              [t('stream.tcClipboard'), t('stream.tcClipboardVal')],
           ]
         : [
               [t('stream.tcMoveCursor'), t('stream.tcMoveCursorVal')],
@@ -89,6 +93,7 @@ export function gestureRows(touchScreen) {
               [t('stream.tcPanZoom'), t('stream.tcPanZoomVal')],
               [t('stream.tcDesktop'), t('stream.tcDesktopVal')],
               [t('stream.tcKeyboard'), t('stream.tcKeyboardVal')],
+              [t('stream.tcClipboard'), t('stream.tcClipboardVal')],
           ];
 }
 
