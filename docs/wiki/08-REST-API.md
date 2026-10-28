@@ -171,6 +171,8 @@ All are reached through the **single HTTPS port** — `HttpServer` recognizes th
 | `/ws2`…`/ws4` (+ `/stream`) | 48013/48014, 48015/48016, 48017/48018 | One pair per **invited player** (slot *n* ≥ 1 → 48011 + 2 × (*n* − 1), relay one above). Gated on the `mw_player` cookie of *that* slot's live share activation — a session cookie and even a loopback peer are refused here. |
 | `/ws/control` | 48003 | **Control channel**: every open tab holds one; used to redirect a tab to `/admin` on a second app launch (single-tab dedup). |
 
+**A slot whose worker is not listening is answered, not hung up on.** When the local connect is refused while the slot has a worker — it is still binding, or a relaunch is replacing it on the same port — the proxy retries for up to 2 s (`server/WsProxyConnect.h`). Otherwise, and when that runs out, the upgrade is answered **`503` + `Retry-After: 1`** before any upgrade (`404` for a slot that does not exist), so a proxy in front passes on a retryable status instead of the 502 it would invent for a closed socket.
+
 The frontend always builds WS URLs from `window.location.host` (page origin) — required for non-default external ports (port parity / multi-instance NAT).
 
 ## 8.6 Static file serving

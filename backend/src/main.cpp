@@ -6324,6 +6324,12 @@ int main(int argc, char* argv[])
         qInfo() << "[Session] Slot" << slot << "opened —" << SessionPool::wsPath(slot) << "on"
                 << slotSignalingPort(slot);
     });
+    // The WebSocket proxy retries a refused local connect while the slot has a
+    // worker — it is still binding, or a relaunch is replacing it on that port.
+    server.setSlotStateProvider([&g_Pool](int slot) {
+        if (!g_Pool.isValid(slot)) return wsproxy::SlotState::Unknown;
+        return g_Pool.live(slot) ? wsproxy::SlotState::Active : wsproxy::SlotState::Idle;
+    });
     server.setFirstPlayerSlot(kOwnerSlots);
     // Player slots end at kTotalSlots; slots above it are the owner's own extra
     // sessions on a second host, so the WS-upgrade auth treats them as the owner

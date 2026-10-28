@@ -30,6 +30,7 @@
 #include "common/Types.h"
 #include "server/ConnectionGuard.h"
 #include "server/CertManager.h"
+#include "server/WsProxyConnect.h"
 
 class RestRouter;
 class StaticFileHandler;
@@ -79,6 +80,14 @@ public:
     void setPlayerSlotAuthorizer(std::function<bool(const HttpRequest&, int slot)> fn)
     {
         m_PlayerSlotAuth = std::move(fn);
+    }
+
+    /// Whether a stream slot has a worker (live or starting), for the WebSocket
+    /// proxy: a refused local connect is retried while it does, and answered
+    /// 503 + Retry-After when it does not (WsProxyConnect.h). Unset: no retry.
+    void setSlotStateProvider(std::function<wsproxy::SlotState(int slot)> fn)
+    {
+        m_SlotState = std::move(fn);
     }
 
     /// Slots at or above this index belong to players, not to the owner.
@@ -317,6 +326,8 @@ private:
     };
     QMap<int, SlotPorts> m_SlotPorts;
 
+    /// Slot occupancy for the WebSocket proxy (see setSlotStateProvider).
+    std::function<wsproxy::SlotState(int slot)> m_SlotState;
     /// Player-slot gate (see setPlayerSlotAuthorizer). Null = closed.
     std::function<bool(const HttpRequest&, int slot)> m_PlayerSlotAuth;
     int m_FirstPlayerSlot = 2;
