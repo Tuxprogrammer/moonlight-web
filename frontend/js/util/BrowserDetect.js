@@ -895,6 +895,115 @@ export async function hevcClientDecodes() {
     return hevcProbe;
 }
 
+/** Forget the page's HEVC probe (tests). */
+export function resetHevcProbe() {
+    hevcProbe = null;
+}
+
+/**
+ * The browsers seen failing to decode HEVC that they said they decode:
+ * user agent → when (ms). Versioned: a later change of meaning takes a new key
+ * and leaves the old verdicts behind instead of misreading them.
+ */
+const HEVC_REFUSED_KEY = 'mw_hevc_refused_v1';
+
+/** How long such a verdict holds. Past it, the next launch tries HEVC again. */
+export const HEVC_REFUSED_DAYS = 30;
+const HEVC_REFUSED_MS = HEVC_REFUSED_DAYS * 24 * 3600 * 1000;
+
+/** @param {Storage|null} store @returns {Object<string, number>} */
+function hevcRefusedVerdicts(store) {
+    try {
+        const kept = store && JSON.parse(store.getItem(HEVC_REFUSED_KEY) || '{}');
+        return kept && typeof kept === 'object' && !Array.isArray(kept) ? kept : {};
+    } catch (e) {
+        return {};
+    }
+}
+
+/** @param {unknown} seen @param {number} now */
+function hevcVerdictHolds(seen, now) {
+    // A date ahead of the clock (the clock set back) holds no longer either.
+    return typeof seen === 'number' && now >= seen && now - seen < HEVC_REFUSED_MS;
+}
+
+/**
+ * Whether this browser was seen failing to decode HEVC SDR, the stream falling
+ * back to H.264: Firefox says yes to isConfigSupported for HEVC and then
+ * decodes nothing, so the probe alone (hevcClientDecodes) let every launch
+ * fail its first picture and come back. Kept under the user agent (a new
+ * version is asked again) for HEVC_REFUSED_DAYS at most.
+ * @param {string} [ua]
+ * @param {Storage|null} [store]
+ * @param {number} [now] ms since the epoch
+ * @returns {boolean}
+ */
+export function hevcDecodeRefused(
+    ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+    store = rideOutStore(),
+    now = Date.now(),
+) {
+    return hevcVerdictHolds(hevcRefusedVerdicts(store)[ua], now);
+}
+
+/**
+ * Remember it (hevcDecodeRefused), dropping the verdicts past their time.
+ * @param {string} [ua]
+ * @param {Storage|null} [store]
+ * @param {number} [now]
+ */
+export function noteHevcDecodeRefused(
+    ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+    store = rideOutStore(),
+    now = Date.now(),
+) {
+    if (!store) return;
+    try {
+        const kept = {};
+        for (const [k, seen] of Object.entries(hevcRefusedVerdicts(store))) {
+            if (hevcVerdictHolds(seen, now)) kept[k] = seen;
+        }
+        kept[ua] = now;
+        store.setItem(HEVC_REFUSED_KEY, JSON.stringify(kept));
+    } catch (e) {
+        // Not kept: the next launch finds out again, a relaunch later.
+    }
+}
+
+/**
+ * Drop this browser's verdict: it was just seen decoding HEVC after all.
+ * @param {string} [ua]
+ * @param {Storage|null} [store]
+ */
+export function forgetHevcDecodeRefused(
+    ua = (typeof navigator !== 'undefined' && navigator.userAgent) || '',
+    store = rideOutStore(),
+) {
+    if (!store) return;
+    try {
+        const kept = hevcRefusedVerdicts(store);
+        if (!(ua in kept)) return;
+        delete kept[ua];
+        if (Object.keys(kept).length) store.setItem(HEVC_REFUSED_KEY, JSON.stringify(kept));
+        else store.removeItem(HEVC_REFUSED_KEY);
+    } catch (e) {
+        // Left as it was: it runs out on its own.
+    }
+}
+
+/**
+ * Whether to ask the host for HEVC: the browser's own answer
+ * (hevcClientDecodes), unless it was seen failing to keep its word.
+ * @param {string} [ua]
+ * @param {Storage|null} [store]
+ * @param {number} [now]
+ * @returns {Promise<boolean>}
+ */
+export async function hevcDecodeTrusted(ua, store, now) {
+    if (hevcDecodeRefused(ua, store, now)) return false;
+    return hevcClientDecodes();
+}
+
 /** True when the app runs as an installed PWA (no browser chrome). */
 export const IS_STANDALONE =
     window.navigator.standalone === true ||

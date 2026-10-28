@@ -27,7 +27,7 @@ import { BackendClient } from '../api/BackendClient.js';
 import { noUsableTransportKey, noUsableTransportReason } from '../api/WebRtcSupport.js';
 import { t } from '../i18n/i18n.js';
 import { escapeHtml } from '../util/escapeHtml.js';
-import { IS_MOBILE_OR_TABLET, IS_TOUCH_DEVICE, hevcClientDecodes } from '../util/BrowserDetect.js';
+import { IS_MOBILE_OR_TABLET, IS_TOUCH_DEVICE, hevcDecodeTrusted } from '../util/BrowserDetect.js';
 import { PlayerArt } from './PlayerArt.js';
 import { noticeHtml } from './PrivacyNotice.js';
 import {
@@ -470,9 +470,10 @@ export class PlayerJoinView {
                 // The stream the guests share is HEVC unless one of them cannot
                 // decode it. A browser that cannot says so now: the stream goes
                 // H.264 for everyone once, instead of this guest failing its
-                // first picture and coming back.
+                // first picture and coming back. A browser that said it could
+                // and then failed is believed no more (hevcDecodeRefused).
                 const codec =
-                    this.info.shared_feed === true && !(await hevcClientDecodes())
+                    this.info.shared_feed === true && !(await hevcDecodeTrusted())
                         ? 'h264'
                         : undefined;
                 await this.onJoin(
