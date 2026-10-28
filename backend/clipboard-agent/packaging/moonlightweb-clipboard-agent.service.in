@@ -1,0 +1,39 @@
+# systemd USER unit for the MoonlightWeb clipboard agent (a Sunshine host).
+#
+# It must run inside the desktop session it shares the clipboard of, as the
+# user signed in there — hence a user unit tied to graphical-session.target,
+# which KDE Plasma, GNOME and most Wayland sessions start (XFCE: see the wiki,
+# §5 "Clipboard agent", for an autostart entry instead).
+#
+#   1. Store the token from the admin page, owner-only:
+#        mkdir -p ~/.config/moonlightweb
+#        (umask 077 && printf '%s\n' 'mwca_…' > ~/.config/moonlightweb/clipboard-agent.token)
+#   2. Put the server and pin from the admin page in ~/.config/moonlightweb/clipboard-agent.env
+#      (the agent reads that file itself, so any other launcher works the same):
+#        MW_CLIPBOARD_AGENT_SERVER=https://192.0.2.10:443
+#        MW_CLIPBOARD_AGENT_PIN=sha256/…
+#   3. systemctl --user daemon-reload
+#      systemctl --user enable --now moonlightweb-clipboard-agent.service
+#
+# Exit codes 2 (token refused or revoked), 3 (another agent took the host over)
+# and 4 (protocol version) are final: issue a new token and restart it.
+
+[Unit]
+Description=MoonlightWeb clipboard agent
+Documentation=https://github.com/linckosz/moonlight-web/blob/main/docs/design/clipboard-agent.md
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=@CMAKE_INSTALL_FULL_BINDIR@/moonlightweb-clipboard-agent
+Restart=on-failure
+RestartSec=5
+RestartPreventExitStatus=2 3 4 64
+# Nothing to write and nothing to listen on: it only dials out.
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictRealtime=yes
+
+[Install]
+WantedBy=graphical-session.target

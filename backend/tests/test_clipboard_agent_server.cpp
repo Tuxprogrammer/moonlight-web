@@ -924,9 +924,17 @@ void run_clipboard_agent_server_tests()
         CHECK(setup.contains("umask 077"));
         CHECK(setup.contains("'" + token + "'"));
         CHECK(setup.contains(ClipboardAgentSetup::defaultTokenFile()));
+        // The settings file the agent reads by itself, written by the setup line.
+        const QString settings = d.value("settings").toString();
+        CHECK_EQ(settings, QString("MW_CLIPBOARD_AGENT_SERVER=https://192.0.2.10:443\n"
+                                   "MW_CLIPBOARD_AGENT_PIN=sha256/AAA=,sha256/BBB=\n"));
+        CHECK(!settings.contains(token));
+        CHECK(setup.contains(ClipboardAgentSetup::defaultSettingsFile()));
+        CHECK_EQ(d.value("settings_file").toString(), ClipboardAgentSetup::defaultSettingsFile());
         // No pins: no --pin.
         const QJsonObject n = ClipboardAgentSetup::describe(token, "https://x:1", {});
         CHECK(!n.value("command").toString().contains("--pin"));
+        CHECK(!n.value("settings").toString().contains("PIN"));
         CHECK_EQ(n.value("args").toArray().size(), 2);
     }
 }

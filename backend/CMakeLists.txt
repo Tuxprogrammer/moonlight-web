@@ -610,6 +610,15 @@ else() # Linux / other Unix
     target_link_libraries(mw-server PRIVATE dl)
 endif()
 
+# ── The clipboard agent for streamed hosts ─────────────────────────────────
+# A separate, small program that runs on a Sunshine host (not here) and shares
+# its desktop's clipboard with this server: docs/design/clipboard-agent.md.
+# Built alongside so releases can ship it; it builds on its own as well.
+option(MW_BUILD_CLIPBOARD_AGENT "Build moonlightweb-clipboard-agent" ON)
+if(MW_BUILD_CLIPBOARD_AGENT)
+    add_subdirectory(clipboard-agent)
+endif()
+
 # ── Linux: the capability launcher ─────────────────────────────────────────
 # KMS capture needs CAP_SYS_ADMIN, and a file capability cannot sit on
 # MoonlightWeb itself (glibc's secure mode refuses its $ORIGIN rpath — see the

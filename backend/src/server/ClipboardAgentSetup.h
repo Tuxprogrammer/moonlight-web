@@ -81,10 +81,17 @@ inline QString shellQuote(const QString& value)
     return QLatin1Char('\'') + out + QLatin1Char('\'');
 }
 
+/// Where the agent reads its server and pin from when no argument names them.
+inline QString defaultSettingsFile()
+{
+    return QStringLiteral("~/.config/moonlightweb/clipboard-agent.env");
+}
+
 /// The issue/rotate answer: the token (shown once), the server URL, the pins,
-/// the agent's arguments, and two POSIX lines — store the token owner-only,
-/// then run the agent. The token never goes on the agent's command line,
-/// where every user of the host could read it in the process list.
+/// the agent's arguments, the agent's settings file, and POSIX lines — store
+/// the token and the settings owner-only, then run the agent. The token never
+/// goes on the agent's command line, where every user of the host could read
+/// it in the process list.
 inline QJsonObject describe(const QString& token, const QString& server, const QStringList& pins)
 {
     QStringList args{QStringLiteral("--server"), server};
@@ -94,15 +101,23 @@ inline QJsonObject describe(const QString& token, const QString& server, const Q
     for (int i = 0; i < args.size(); ++i)
         quoted << (i % 2 ? shellQuote(args[i]) : args[i]);
 
+    QString settings = QStringLiteral("MW_CLIPBOARD_AGENT_SERVER=%1\n").arg(server);
+    if (!pins.isEmpty())
+        settings += QStringLiteral("MW_CLIPBOARD_AGENT_PIN=%1\n").arg(pins.join(QLatin1Char(',')));
+
     const QString setup =
-        QStringLiteral("mkdir -p ~/.config/moonlightweb && (umask 077 && printf '%s\\n' %1 > %2)")
-            .arg(shellQuote(token), defaultTokenFile());
+        QStringLiteral("mkdir -p ~/.config/moonlightweb && (umask 077 && printf '%s\\n' %1 > %2 "
+                       "&& printf '%s' %3 > %4)")
+            .arg(shellQuote(token), defaultTokenFile(), shellQuote(settings),
+                 defaultSettingsFile());
 
     QJsonObject o;
     o.insert(QStringLiteral("token"), token);
     o.insert(QStringLiteral("server"), server);
     o.insert(QStringLiteral("pins"), QJsonArray::fromStringList(pins));
     o.insert(QStringLiteral("token_file"), defaultTokenFile());
+    o.insert(QStringLiteral("settings_file"), defaultSettingsFile());
+    o.insert(QStringLiteral("settings"), settings);
     o.insert(QStringLiteral("args"), QJsonArray::fromStringList(args));
     o.insert(QStringLiteral("setup"), setup);
     o.insert(QStringLiteral("command"),
